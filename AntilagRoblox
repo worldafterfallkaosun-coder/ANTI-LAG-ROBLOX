@@ -1,10 +1,9 @@
 -- ================================================
--- NONO ANTI-LAG v5.4 | CAMERA ZOOM BYPASS — REAL FIX
+-- NONO ANTI-LAG v5.3 | SCROLL + N BUTTON PATCH
 -- Tambah: ScrollingFrame di body, tombol N bulat
 -- v5.2: Sound & overhead (nametag/healthbar BillboardGui)
 --       TIDAK lagi dimatikan/disenyapkan
--- v5.4: Zoom bypass via scroll intercept + RenderStepped CFrame
---       Toggle di UI existing (LayoutOrder 13)
+-- v5.3: Panel body dipendekin (persegi), sisanya discroll
 -- ================================================
 
 local Players          = game:GetService("Players")
@@ -36,19 +35,13 @@ local CFG = {
 }
 
 local state = {
-    texture    = true,
-    shadow     = true,
-    leaf       = true,
-    fx         = true,
-    anchor     = true,
-    sky        = false,
-    zoomBypass = false,  -- v5.3: bypass MaxZoomDistance
+    texture = true,
+    shadow  = true,
+    leaf    = true,
+    fx      = true,
+    anchor  = true,
+    sky     = false,
 }
-
--- v5.3: Zoom bypass internals
-local ZOOM_BYPASS_LIMIT   = 1000   -- studs, praktis unlimited
-local zoomBypassConn      = nil
-local zoomBypassActive    = false
 
 local applied      = false
 local fpsCapValue  = CFG.fpsTarget
@@ -89,130 +82,6 @@ local function tryFPSCap(fps)
 end
 local function tryHidden(obj, prop, val)
     if HAS_SETHIDDEN then pcall(sethiddenproperty, obj, prop, val) end
-end
-
--- ================================================
--- v5.4: CAMERA MAX ZOOM BYPASS — REAL IMPLEMENTATION
--- Strategy: intercept scroll wheel → manual zoom offset
--- CameraMaxZoomDistance ga bisa dipaksa dari luar tanpa
--- sethiddenproperty yg works. Solusi: kita AMBIL ALIH zoom
--- control sepenuhnya via scroll hook + RenderStepped CFrame lock.
--- ================================================
-local Camera = workspace.CurrentCamera
-
--- zoom state
-local zoomCurrent  = 10    -- zoom distance saat ini (studs)
-local ZOOM_MIN     = 0.5
-local ZOOM_MAX     = 1000  -- batas atas "unlimited"
-local ZOOM_STEP    = 2     -- studs per scroll tick
-local zoomConns    = {}    -- koneksi khusus zoom, supaya bisa dicabut
-
-local function disconnectZoomConns()
-    for _, c in ipairs(zoomConns) do
-        pcall(function() c:Disconnect() end)
-    end
-    zoomConns = {}
-end
-
-local function applyZoomBypass()
-    if zoomBypassActive then return end
-    zoomBypassActive = true
-    disconnectZoomConns()
-
-    -- Step 1: set CameraMaxZoomDistance via semua metode yang ada
-    local function forceHumZoom(char)
-        if not char then return end
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if not hum then return end
-        -- coba sethiddenproperty
-        pcall(function() sethiddenproperty(hum, "CameraMaxZoomDistance", ZOOM_MAX) end)
-        -- coba property langsung (kalau executor expose ini)
-        pcall(function() hum.CameraMaxZoomDistance = ZOOM_MAX end)
-    end
-
-    -- paksa sekarang
-    forceHumZoom(lp.Character)
-
-    -- Step 2: intercept scroll wheel → kontrol zoom manual
-    -- ini yang BENERAN bypass karena kita gantiin behavior scroll
-    local scrollConn = UserInputService.InputChanged:Connect(function(input, gpe)
-        if not state.zoomBypass then return end
-        if gpe then return end  -- game processed event → skip
-        if input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
-
-        local delta = input.Position.Z  -- +1 scroll out, -1 scroll in
-        zoomCurrent = math.clamp(zoomCurrent - delta * ZOOM_STEP, ZOOM_MIN, ZOOM_MAX)
-    end)
-    table.insert(zoomConns, scrollConn)
-    trackConn(scrollConn)
-
-    -- Step 3: RenderStepped — paksa CFrame offset sesuai zoomCurrent
-    -- hanya aktif kalau CameraType = Custom (default third person)
-    local renderConn = RunService.RenderStepped:Connect(function()
-        if not state.zoomBypass then return end
-        pcall(function()
-            local cam  = workspace.CurrentCamera
-            local char = lp.Character
-            if not char then return end
-            local root = char:FindFirstChild("HumanoidRootPart")
-            if not root then return end
-
-            -- hanya intercept kalau camera mode Custom / Follow
-            if cam.CameraType ~= Enum.CameraType.Custom
-            and cam.CameraType ~= Enum.CameraType.Follow then return end
-
-            local rootCF   = root.CFrame
-            local camCF    = cam.CFrame
-            local lookDir  = (camCF.Position - rootCF.Position)
-
-            -- kalau distance udah sama → skip (no-op)
-            local curDist = lookDir.Magnitude
-            if math.abs(curDist - zoomCurrent) < 0.05 then return end
-
-            -- reposisi camera di jarak zoomCurrent, arah sama
-            local dir     = lookDir.Unit
-            local newPos  = rootCF.Position + dir * zoomCurrent
-            -- pertahankan look direction
-            cam.CFrame    = CFrame.new(newPos, rootCF.Position)
-        end)
-    end)
-    table.insert(zoomConns, renderConn)
-    trackConn(renderConn)
-
-    -- Step 4: update zoomCurrent ke distance kamera sekarang saat pertama aktif
-    pcall(function()
-        local char = lp.Character
-        local root = char and char:FindFirstChild("HumanoidRootPart")
-        local cam  = workspace.CurrentCamera
-        if root and cam then
-            local dist = (cam.CFrame.Position - root.Position).Magnitude
-            zoomCurrent = math.clamp(dist, ZOOM_MIN, ZOOM_MAX)
-        end
-    end)
-
-    -- Step 5: respawn handler
-    local respawnConn = lp.CharacterAdded:Connect(function(char)
-        if not state.zoomBypass then return end
-        task.wait(0.3)
-        forceHumZoom(char)
-        zoomCurrent = 10  -- reset ke default saat respawn
-    end)
-    table.insert(zoomConns, respawnConn)
-    trackConn(respawnConn)
-end
-
-local function removeZoomBypass()
-    if not zoomBypassActive then return end
-    zoomBypassActive = false
-    disconnectZoomConns()
-    -- restore MaxZoomDistance ke default 400
-    pcall(function()
-        local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
-        if hum then
-            pcall(function() sethiddenproperty(hum, "CameraMaxZoomDistance", 400) end)
-            pcall(function() hum.CameraMaxZoomDistance = 400 end)
-        end
-    end)
 end
 
 -- ================================================
@@ -600,7 +469,7 @@ nBtnStroke.Thickness = 1
 -- ================================================
 local bodyWrapper = Instance.new("Frame", main)
 bodyWrapper.Name             = "BodyWrapper"
-bodyWrapper.Size             = UDim2.new(1, 0, 0, 340) -- max height sebelum scroll
+bodyWrapper.Size             = UDim2.new(1, 0, 0, 210) -- dipendekin biar agak persegi, sisanya discroll
 bodyWrapper.BackgroundTransparency = 1
 bodyWrapper.BorderSizePixel  = 0
 bodyWrapper.LayoutOrder      = 1
@@ -865,77 +734,6 @@ makeToggleRow("Kill FX",      "fx",      8)
 makeToggleRow("Anchor Parts", "anchor",  9)
 makeToggleRow("Kill Skybox",  "sky",     10)
 
--- ================================================
--- v5.3: ZOOM BYPASS TOGGLE ROW (custom, karena punya side effect)
--- ================================================
-do
-    local zRow = Instance.new("Frame", body)
-    zRow.Size             = UDim2.new(1,0,0,26)
-    zRow.BackgroundColor3 = Color3.fromRGB(20,20,20)
-    zRow.BorderSizePixel  = 0
-    zRow.LayoutOrder      = 13
-    Instance.new("UICorner", zRow).CornerRadius = UDim.new(0,6)
-
-    -- stroke accent biar keliatan beda (fitur baru)
-    local zStroke = Instance.new("UIStroke", zRow)
-    zStroke.Color     = Color3.fromRGB(80, 60, 200)
-    zStroke.Thickness = 0.6
-
-    local zLbl = Instance.new("TextLabel", zRow)
-    zLbl.Text               = "Zoom Bypass"
-    zLbl.Font               = Enum.Font.Code
-    zLbl.TextSize           = 9
-    zLbl.TextColor3         = Color3.fromRGB(180,160,255)
-    zLbl.BackgroundTransparency = 1
-    zLbl.Size               = UDim2.new(1,-44,1,0)
-    zLbl.Position           = UDim2.new(0,8,0,0)
-    zLbl.TextXAlignment     = Enum.TextXAlignment.Left
-
-    local zPill = Instance.new("Frame", zRow)
-    zPill.Size             = UDim2.new(0,28,0,14)
-    zPill.Position         = UDim2.new(1,-34,0.5,-7)
-    zPill.BackgroundColor3 = Color3.fromRGB(55,55,55) -- OFF by default
-    zPill.BorderSizePixel  = 0
-    Instance.new("UICorner", zPill).CornerRadius = UDim.new(1,0)
-
-    local zThumb = Instance.new("Frame", zPill)
-    zThumb.Size             = UDim2.new(0,10,0,10)
-    zThumb.Position         = UDim2.new(0,2,0.5,-5) -- OFF pos
-    zThumb.BackgroundColor3 = Color3.fromRGB(255,255,255)
-    zThumb.BorderSizePixel  = 0
-    Instance.new("UICorner", zThumb).CornerRadius = UDim.new(1,0)
-
-    local zBtn = Instance.new("TextButton", zRow)
-    zBtn.Size                = UDim2.new(1,0,1,0)
-    zBtn.BackgroundTransparency = 1
-    zBtn.Text                = ""
-    zBtn.ZIndex              = 5
-
-    zBtn.MouseButton1Click:Connect(function()
-        state.zoomBypass = not state.zoomBypass
-
-        local onColor  = Color3.fromRGB(100,80,255)
-        local offColor = Color3.fromRGB(55,55,55)
-
-        TweenService:Create(zPill, TweenInfo.new(0.12), {
-            BackgroundColor3 = state.zoomBypass and onColor or offColor
-        }):Play()
-        TweenService:Create(zThumb, TweenInfo.new(0.12), {
-            Position = state.zoomBypass
-                and UDim2.new(1,-12,0.5,-5)
-                or  UDim2.new(0,2,0.5,-5)
-        }):Play()
-
-        if state.zoomBypass then
-            applyZoomBypass()
-            log("zoom bypass ON (" .. ZOOM_BYPASS_LIMIT .. " studs)")
-        else
-            removeZoomBypass()
-            log("zoom bypass OFF (reset 400)")
-        end
-    end)
-end
-
 -- APPLY BUTTON
 local applyBtn=Instance.new("TextButton",body)
 applyBtn.Text="⚡ APPLY NUKE"; applyBtn.Font=Enum.Font.Code; applyBtn.TextSize=10
@@ -1158,5 +956,5 @@ trackConn(workspace.DescendantAdded:Connect(function(obj)
     task.defer(function() pcall(function() nukeWorldObject(obj) end) end)
 end))
 
-print("[NONO v5.4] zoom bypass real fix loaded. scroll intercept + RenderStepped active")
+print("[NONO v5.3] scroll + N button loaded. (sound & overhead preserved, panel compact)")
 print("setfpscap:", HAS_SETFPSCAP, "| sethiddenproperty:", HAS_SETHIDDEN)
