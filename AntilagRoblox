@@ -1,7 +1,7 @@
 -- ================================================
--- NONO ANTI-LAG v5.0 | CROWD PROOF
--- Fix: lag saat rame player, stable FPS, adaptive LOD
--- Zero bug policy: semua connection di-track & cleanup
+-- NONO ANTI-LAG v5.1 | SCROLL + N BUTTON PATCH
+-- Tambah: ScrollingFrame di body, tombol N bulat
+-- Logic sama persis v5.0
 -- ================================================
 
 local Players          = game:GetService("Players")
@@ -13,171 +13,124 @@ local SoundService     = game:GetService("SoundService")
 
 local lp = Players.LocalPlayer
 
--- ================================================
--- CLEANUP — kalau script dirun ulang, bersih dulu
--- ================================================
-local OLD_GUI = lp.PlayerGui:FindFirstChild("NonoAntiLag")
-if OLD_GUI then OLD_GUI:Destroy() end
+-- CLEANUP
+local OLD = lp.PlayerGui:FindFirstChild("NonoAntiLag")
+if OLD then OLD:Destroy() end
 
--- Track semua connections biar bisa cleanup
 local CONNECTIONS = {}
-local function trackConn(conn)
-    table.insert(CONNECTIONS, conn)
-    return conn
-end
-local function cleanupConnections()
-    for _, c in ipairs(CONNECTIONS) do
-        pcall(function() c:Disconnect() end)
-    end
-    CONNECTIONS = {}
-end
+local function trackConn(c) table.insert(CONNECTIONS, c); return c end
 
 -- ================================================
 -- CONFIG
 -- ================================================
 local CFG = {
-    fpsTarget       = 60,    -- target FPS
-    fpsLowThreshold = 35,    -- kalau di bawah ini -> adaptive kick
-    renderDist      = 512,   -- stud radius
-    playerLODDist   = 80,    -- stud radius per-player LOD
-    batchSize       = 200,   -- obj per frame saat scan
-    adaptiveEnabled = true,  -- auto-optimize saat FPS drop
+    fpsTarget       = 60,
+    fpsLowThreshold = 35,
+    renderDist      = 512,
+    playerLODDist   = 80,
+    batchSize       = 200,
+    adaptiveEnabled = true,
 }
 
 local state = {
-    texture  = true,
-    shadow   = true,
-    leaf     = true,
-    fx       = true,
-    anchor   = true,
-    sky      = false,
+    texture = true,
+    shadow  = true,
+    leaf    = true,
+    fx      = true,
+    anchor  = true,
+    sky     = false,
 }
 
-local applied        = false
-local fpsCapValue    = CFG.fpsTarget
-local renderDist     = CFG.renderDist
-local adaptiveTier   = 0  -- 0=normal, 1=mild drop, 2=severe drop
+local applied      = false
+local fpsCapValue  = CFG.fpsTarget
+local renderDist   = CFG.renderDist
+local adaptiveTier = 0
 
 -- ================================================
--- FPS SYSTEM — rolling average, stable reading
+-- FPS SYSTEM
 -- ================================================
-local FPS_SAMPLES    = {}
-local FPS_MAX_SAMPLE = 60
-local currentFPS     = 60
+local FPS_SAMPLES = {}
+local currentFPS  = 60
 
 trackConn(RunService.RenderStepped:Connect(function(dt)
     if dt <= 0 then return end
-    table.insert(FPS_SAMPLES, 1 / dt)
-    if #FPS_SAMPLES > FPS_MAX_SAMPLE then
-        table.remove(FPS_SAMPLES, 1)
-    end
-    local sum = 0
-    for _, v in ipairs(FPS_SAMPLES) do sum = sum + v end
-    currentFPS = math.floor(sum / #FPS_SAMPLES)
+    table.insert(FPS_SAMPLES, 1/dt)
+    if #FPS_SAMPLES > 60 then table.remove(FPS_SAMPLES, 1) end
+    local s = 0
+    for _, v in ipairs(FPS_SAMPLES) do s = s + v end
+    currentFPS = math.floor(s / #FPS_SAMPLES)
 end))
 
 local function colorFPS(fps)
-    return fps >= 55 and Color3.fromRGB(80, 220, 120)
-        or fps >= 40 and Color3.fromRGB(220, 200, 60)
-        or fps >= 25 and Color3.fromRGB(220, 130, 60)
-        or Color3.fromRGB(220, 70, 60)
+    return fps >= 55 and Color3.fromRGB(80,220,120)
+        or fps >= 40 and Color3.fromRGB(220,200,60)
+        or fps >= 25 and Color3.fromRGB(220,130,60)
+        or Color3.fromRGB(220,70,60)
 end
 
 -- ================================================
 -- EXECUTOR BRIDGE
 -- ================================================
-local HAS_SETFPSCAP        = type(setfpscap) == "function"
-local HAS_SETHIDDEN        = type(sethiddenproperty) == "function"
+local HAS_SETFPSCAP = type(setfpscap) == "function"
+local HAS_SETHIDDEN = type(sethiddenproperty) == "function"
 
 local function tryFPSCap(fps)
-    if HAS_SETFPSCAP then
-        pcall(setfpscap, fps)
-        return true
-    end
+    if HAS_SETFPSCAP then pcall(setfpscap, fps); return true end
     return false
 end
-
 local function tryHidden(obj, prop, val)
-    if HAS_SETHIDDEN then
-        pcall(sethiddenproperty, obj, prop, val)
-    end
+    if HAS_SETHIDDEN then pcall(sethiddenproperty, obj, prop, val) end
 end
 
 -- ================================================
--- PLAYER OPTIMIZATION CORE
--- Ini yang fix lag saat rame player
+-- PLAYER OPTIMIZATION
 -- ================================================
-local playerOptimized = {}  -- track player yang udah di-optimize
+local playerOptimized = {}
 
 local leafKW = {
     "leaf","leaves","daun","foliage","tree","pohon","bush","shrub",
     "grass","rumput","plant","tanaman","bark","branch","vine","fern"
 }
-
 local function isLeafName(name)
     local low = name:lower()
     for _, k in ipairs(leafKW) do
-        if low:find(k, 1, true) then return true end
+        if low:find(k,1,true) then return true end
     end
     return false
 end
 
 local function optimizeCharacter(char, isLocal)
     if not char then return end
-
-    -- [1] Kill SurfaceAppearance di accessories
-    --     ini paling berat: tiap hat/accessory punya PBR texture
     for _, obj in ipairs(char:GetDescendants()) do
         pcall(function()
             if obj:IsA("SurfaceAppearance") or obj:IsA("MaterialVariant") then
                 obj:Destroy()
-
             elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail")
             or obj:IsA("Beam") or obj:IsA("Fire")
             or obj:IsA("Smoke") or obj:IsA("Sparkles") then
-                -- aura, trail, fx dari accessories
                 obj:Destroy()
-
             elseif obj:IsA("MeshPart") or obj:IsA("Part") then
-                -- [2] Character parts -> SmoothPlastic
-                obj.Material    = Enum.Material.SmoothPlastic
+                obj.Material = Enum.Material.SmoothPlastic
                 obj.Reflectance = 0
-                obj.CastShadow  = false
-                -- Kill texture di MeshPart (hat texture)
-                if obj:IsA("MeshPart") then
-                    obj.TextureID = ""
-                end
-
+                obj.CastShadow = false
+                if obj:IsA("MeshPart") then obj.TextureID = "" end
             elseif obj:IsA("Decal") or obj:IsA("Texture") then
                 obj.Transparency = 1
-
             elseif obj:IsA("PointLight") or obj:IsA("SpotLight")
             or obj:IsA("SurfaceLight") then
-                -- tool glow, dll
                 obj.Enabled = false
-
-            elseif obj:IsA("Sound") then
-                -- footstep, dll per karakter
-                if not isLocal then
-                    obj.Volume = 0
-                    pcall(function() obj:Stop() end)
-                end
-
-            elseif obj:IsA("BillboardGui") then
-                -- nameplate, health bar overhead
-                if not isLocal then
-                    obj.Enabled = false
-                end
-
+            elseif obj:IsA("Sound") and not isLocal then
+                obj.Volume = 0; pcall(function() obj:Stop() end)
+            elseif obj:IsA("BillboardGui") and not isLocal then
+                obj.Enabled = false
             elseif obj:IsA("Humanoid") and not isLocal then
-                -- [3] Disable expensive humanoid states untuk non-local
                 pcall(function()
                     obj:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
                     obj:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
                     obj:SetStateEnabled(Enum.HumanoidStateType.GettingUp, false)
-                    obj.DisplayDistanceType  = Enum.HumanoidDisplayDistanceType.None
-                    obj.HealthDisplayType    = Enum.HumanoidHealthDisplayType.AlwaysHide
-                    obj.NameDisplayDistance  = 0
+                    obj.DisplayDistanceType   = Enum.HumanoidDisplayDistanceType.None
+                    obj.HealthDisplayType     = Enum.HumanoidHealthDisplayType.AlwaysHide
+                    obj.NameDisplayDistance   = 0
                     obj.HealthDisplayDistance = 0
                 end)
             end
@@ -185,67 +138,39 @@ local function optimizeCharacter(char, isLocal)
     end
 end
 
--- Distance-based player LOD
--- Kalau player jauh, reduce lebih agresif
 local function applyPlayerDistanceLOD()
-    local char    = lp.Character
-    local root    = char and char:FindFirstChild("HumanoidRootPart")
+    local char = lp.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root then return end
     local rp = root.Position
-
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= lp and plr.Character then
-            local otherRoot = plr.Character:FindFirstChild("HumanoidRootPart")
-            if otherRoot then
-                local dist = (otherRoot.Position - rp).Magnitude
-                local otherChar = plr.Character
-
-                if dist > CFG.playerLODDist then
-                    -- player jauh: hide accessories, reduce quality
-                    for _, obj in ipairs(otherChar:GetDescendants()) do
-                        pcall(function()
-                            if obj:IsA("Accessory") then
-                                local handle = obj:FindFirstChild("Handle")
-                                if handle then
-                                    handle.Transparency = 1
-                                end
-                            elseif obj:IsA("Animator") then
-                                -- pause animator kalau jauh
-                                -- obj:GetPlayingAnimationTracks() lalu :AdjustSpeed(0)
-                                -- disabled: bisa bikin T-pose, skip
+            local or2 = plr.Character:FindFirstChild("HumanoidRootPart")
+            if or2 then
+                local dist = (or2.Position - rp).Magnitude
+                for _, obj in ipairs(plr.Character:GetDescendants()) do
+                    pcall(function()
+                        if obj:IsA("Accessory") then
+                            local h = obj:FindFirstChild("Handle")
+                            if h then
+                                h.Transparency = dist > CFG.playerLODDist and 1 or 0
                             end
-                        end)
-                    end
-                else
-                    -- player deket: pastiin accessories visible
-                    for _, obj in ipairs(otherChar:GetDescendants()) do
-                        pcall(function()
-                            if obj:IsA("Accessory") then
-                                local handle = obj:FindFirstChild("Handle")
-                                if handle and handle.Transparency == 1 then
-                                    handle.Transparency = 0
-                                end
-                            end
-                        end)
-                    end
+                        end
+                    end)
                 end
             end
         end
     end
 end
 
--- Optimize semua player existing + listen yang baru masuk
 local function setupPlayerOptimization()
-    -- Optimize semua player yang udah ada
     for _, plr in ipairs(Players:GetPlayers()) do
         local isLocal = plr == lp
         local function handleChar(char)
             if playerOptimized[plr.UserId] then return end
-            task.wait(0.5) -- tunggu char fully loaded
+            task.wait(0.5)
             optimizeCharacter(char, isLocal)
             playerOptimized[plr.UserId] = true
-
-            -- Listen kalau ada item baru ditambah ke char (equip weapon, etc)
             trackConn(char.DescendantAdded:Connect(function(obj)
                 task.defer(function()
                     pcall(function()
@@ -255,34 +180,28 @@ local function setupPlayerOptimization()
                         or obj:IsA("Fire") or obj:IsA("Smoke") or obj:IsA("Sparkles") then
                             obj:Destroy()
                         elseif obj:IsA("MeshPart") then
-                            obj.TextureID   = ""
-                            obj.Material    = Enum.Material.SmoothPlastic
-                            obj.CastShadow  = false
+                            obj.TextureID = ""
+                            obj.Material  = Enum.Material.SmoothPlastic
+                            obj.CastShadow = false
                         end
                     end)
                 end)
             end))
         end
-
-        if plr.Character then
-            task.spawn(handleChar, plr.Character)
-        end
+        if plr.Character then task.spawn(handleChar, plr.Character) end
         trackConn(plr.CharacterAdded:Connect(function(char)
-            playerOptimized[plr.UserId] = nil -- reset biar di-re-optimize
+            playerOptimized[plr.UserId] = nil
             task.spawn(handleChar, char)
         end))
     end
 
-    -- Player baru masuk
     trackConn(Players.PlayerAdded:Connect(function(plr)
-        local isLocal = plr == lp
         trackConn(plr.CharacterAdded:Connect(function(char)
             playerOptimized[plr.UserId] = nil
             task.spawn(function()
                 task.wait(0.5)
-                optimizeCharacter(char, isLocal)
+                optimizeCharacter(char, plr == lp)
                 playerOptimized[plr.UserId] = true
-
                 trackConn(char.DescendantAdded:Connect(function(obj)
                     task.defer(function()
                         pcall(function()
@@ -303,97 +222,71 @@ local function setupPlayerOptimization()
         end))
     end))
 
-    -- Player keluar: cleanup tracking
     trackConn(Players.PlayerRemoving:Connect(function(plr)
         playerOptimized[plr.UserId] = nil
     end))
 end
 
 -- ================================================
--- ADAPTIVE FPS SYSTEM
--- Monitor FPS, kalau drop -> auto optimize lebih
+-- ADAPTIVE FPS
 -- ================================================
 local adaptiveConn = nil
-local lastAdaptiveCheck = 0
+local lastAdaptCheck = 0
 
 local function startAdaptiveSystem(logBox, statusVal)
-    if adaptiveConn then
-        pcall(function() adaptiveConn:Disconnect() end)
-    end
-
+    if adaptiveConn then pcall(function() adaptiveConn:Disconnect() end) end
     adaptiveConn = RunService.Heartbeat:Connect(function()
         local now = os.clock()
-        if now - lastAdaptiveCheck < 3 then return end -- check tiap 3 detik
-        lastAdaptiveCheck = now
-
+        if now - lastAdaptCheck < 3 then return end
+        lastAdaptCheck = now
         local fps = currentFPS
-
         if fps < CFG.fpsLowThreshold and adaptiveTier < 2 then
-            adaptiveTier = adaptiveTier + 1
-
+            adaptiveTier += 1
             if adaptiveTier == 1 then
-                -- Mild: reduce render dist 25%
                 renderDist = math.max(128, renderDist * 0.75)
-                logBox.Text = "> adaptive tier 1: dist->" .. renderDist
-                -- Re-apply render distance
+                logBox.Text = "> adaptive T1: dist->"..renderDist
                 task.spawn(function()
-                    local char = lp.Character
-                    local root = char and char:FindFirstChild("HumanoidRootPart")
-                    if not root then return end
-                    local rp = root.Position
+                    local c = lp.Character
+                    local r = c and c:FindFirstChild("HumanoidRootPart")
+                    if not r then return end
+                    local rp = r.Position
                     for _, obj in ipairs(workspace:GetDescendants()) do
                         pcall(function()
                             if obj:IsA("BasePart") then
-                                local isChar = false
+                                local ic = false
                                 for _, p in ipairs(Players:GetPlayers()) do
-                                    if p.Character and obj:IsDescendantOf(p.Character) then
-                                        isChar = true; break
-                                    end
+                                    if p.Character and obj:IsDescendantOf(p.Character) then ic=true; break end
                                 end
-                                if not isChar and (obj.Position-rp).Magnitude > renderDist then
+                                if not ic and (obj.Position-rp).Magnitude > renderDist then
                                     obj.Transparency = 1
                                 end
                             end
                         end)
                     end
                 end)
-
             elseif adaptiveTier == 2 then
-                -- Severe: kill semua non-essential
-                logBox.Text = "> adaptive tier 2: max reduction"
+                logBox.Text = "> adaptive T2: max reduction"
                 task.spawn(function()
-                    -- Kill semua remaining lights
                     for _, obj in ipairs(workspace:GetDescendants()) do
                         pcall(function()
                             if obj:IsA("PointLight") or obj:IsA("SpotLight")
-                            or obj:IsA("SurfaceLight") then
-                                obj.Enabled = false
-                            elseif obj:IsA("Sound") then
-                                obj.Volume = 0
+                            or obj:IsA("SurfaceLight") then obj.Enabled = false
+                            elseif obj:IsA("Sound") then obj.Volume = 0
                             end
                         end)
                     end
-                    -- Bump FPS cap kalau setfpscap available
-                    -- cap lebih rendah = lebih stable di hardware lemah
-                    if HAS_SETFPSCAP then
-                        pcall(setfpscap, 30) -- target 30 stable > 60 unstable
-                    end
-                    -- Kill player LOD agresif
+                    if HAS_SETFPSCAP then pcall(setfpscap, 30) end
                     applyPlayerDistanceLOD()
                 end)
             end
-
-            statusVal.Text       = "● ADAPTIVE T" .. adaptiveTier
-            statusVal.TextColor3 = Color3.fromRGB(255, 180, 0)
-
+            statusVal.Text       = "● ADAPTIVE T"..adaptiveTier
+            statusVal.TextColor3 = Color3.fromRGB(255,180,0)
         elseif fps >= 50 and adaptiveTier > 0 then
-            -- FPS recover, reset tier
             adaptiveTier = 0
             statusVal.Text       = "● ACTIVE"
-            statusVal.TextColor3 = Color3.fromRGB(0, 255, 136)
+            statusVal.TextColor3 = Color3.fromRGB(0,255,136)
         end
     end)
-
     trackConn(adaptiveConn)
 end
 
@@ -413,15 +306,11 @@ local function nukeWorldObject(obj)
         or obj:IsA("BallSocketConstraint") or obj:IsA("PrismaticConstraint")
         or obj:IsA("BodyVelocity")     or obj:IsA("BodyPosition")
         or obj:IsA("BodyForce")        or obj:IsA("BodyGyro") then
-            -- cek dulu bukan bagian karakter
-            local inChar = false
+            local ic = false
             for _, p in ipairs(Players:GetPlayers()) do
-                if p.Character and obj:IsDescendantOf(p.Character) then
-                    inChar = true; break
-                end
+                if p.Character and obj:IsDescendantOf(p.Character) then ic=true; break end
             end
-            if not inChar then obj:Destroy() end
-            return
+            if not ic then obj:Destroy() end; return
         end
         if obj:IsA("SelectionBox") or obj:IsA("SelectionSphere") then
             obj:Destroy(); return
@@ -430,85 +319,53 @@ local function nukeWorldObject(obj)
             obj.MaxActivationDistance = 0; return
         end
         if obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then
-            -- hanya di workspace, bukan karakter player
-            local inChar = false
+            local ic = false
             for _, p in ipairs(Players:GetPlayers()) do
-                if p.Character and obj:IsDescendantOf(p.Character) then
-                    inChar = true; break
-                end
+                if p.Character and obj:IsDescendantOf(p.Character) then ic=true; break end
             end
-            if not inChar then obj.Enabled = false end
-            return
+            if not ic then obj.Enabled = false end; return
         end
         if obj:IsA("Sound") then
-            local inChar = false
+            local ic = false
             for _, p in ipairs(Players:GetPlayers()) do
-                if p.Character and obj:IsDescendantOf(p.Character) then
-                    inChar = true; break
-                end
+                if p.Character and obj:IsDescendantOf(p.Character) then ic=true; break end
             end
-            if not inChar then
-                obj.Volume = 0
-                pcall(function() obj:Stop() end)
-            end
-            return
+            if not ic then obj.Volume=0; pcall(function() obj:Stop() end) end; return
         end
         if obj:IsA("MeshPart") then
-            if state.texture then
-                obj.TextureID   = ""
-                obj.Material    = Enum.Material.SmoothPlastic
-                obj.Reflectance = 0
-            end
-            if state.shadow then obj.CastShadow = false end
-            return
+            if state.texture then obj.TextureID=""; obj.Material=Enum.Material.SmoothPlastic; obj.Reflectance=0 end
+            if state.shadow then obj.CastShadow=false end; return
         end
         if obj:IsA("SpecialMesh") then
-            if state.texture then obj.TextureId = "" end
-            return
+            if state.texture then obj.TextureId="" end; return
         end
         if obj:IsA("BasePart") then
-            -- skip character parts dari world nuke
-            local inChar = false
+            local ic = false
             for _, p in ipairs(Players:GetPlayers()) do
-                if p.Character and obj:IsDescendantOf(p.Character) then
-                    inChar = true; break
-                end
+                if p.Character and obj:IsDescendantOf(p.Character) then ic=true; break end
             end
-            if inChar then return end
-
-            if state.texture then
-                obj.Material    = Enum.Material.SmoothPlastic
-                obj.Reflectance = 0
-            end
-            if state.shadow then obj.CastShadow = false end
+            if ic then return end
+            if state.texture then obj.Material=Enum.Material.SmoothPlastic; obj.Reflectance=0 end
+            if state.shadow then obj.CastShadow=false end
             if state.leaf and isLeafName(obj.Name) then
-                obj.Transparency = 1
-                obj.CanCollide   = false
-                obj.CastShadow   = false
-                return
+                obj.Transparency=1; obj.CanCollide=false; obj.CastShadow=false; return
             end
             if state.anchor then
-                obj.Anchored = true
+                obj.Anchored=true
                 pcall(function() obj:SetNetworkOwner(nil) end)
-            end
-            return
+            end; return
         end
         if obj:IsA("Decal") or obj:IsA("Texture") then
-            if state.texture then obj.Transparency = 1 end
-            return
+            if state.texture then obj.Transparency=1 end; return
         end
-        if state.fx and (
-            obj:IsA("ParticleEmitter") or obj:IsA("Fire")   or
-            obj:IsA("Smoke")           or obj:IsA("Sparkles") or
-            obj:IsA("Trail")           or obj:IsA("Beam")
-        ) then
-            local inChar = false
-            for _, p in ipairs(Players:GetPlayers()) do
-                if p.Character and obj:IsDescendantOf(p.Character) then
-                    inChar = true; break
-                end
+        if state.fx and (obj:IsA("ParticleEmitter") or obj:IsA("Fire") or
+            obj:IsA("Smoke") or obj:IsA("Sparkles") or
+            obj:IsA("Trail") or obj:IsA("Beam")) then
+            local ic=false
+            for _,p in ipairs(Players:GetPlayers()) do
+                if p.Character and obj:IsDescendantOf(p.Character) then ic=true; break end
             end
-            if not inChar then obj:Destroy() end
+            if not ic then obj:Destroy() end
         end
     end)
 end
@@ -521,14 +378,12 @@ local function applyRenderDistOnce()
     for _, obj in ipairs(workspace:GetDescendants()) do
         pcall(function()
             if obj:IsA("BasePart") then
-                local inChar = false
-                for _, p in ipairs(Players:GetPlayers()) do
-                    if p.Character and obj:IsDescendantOf(p.Character) then
-                        inChar = true; break
-                    end
+                local ic=false
+                for _,p in ipairs(Players:GetPlayers()) do
+                    if p.Character and obj:IsDescendantOf(p.Character) then ic=true; break end
                 end
-                if not inChar and (obj.Position-rp).Magnitude > renderDist then
-                    obj.Transparency = 1; n += 1
+                if not ic and (obj.Position-rp).Magnitude > renderDist then
+                    obj.Transparency=1; n+=1
                 end
             end
         end)
@@ -537,7 +392,7 @@ local function applyRenderDistOnce()
 end
 
 -- ================================================
--- GUI
+-- GUI BUILD
 -- ================================================
 local sg = Instance.new("ScreenGui")
 sg.Name           = "NonoAntiLag"
@@ -547,16 +402,17 @@ sg.IgnoreGuiInset = true
 sg.DisplayOrder   = 999
 sg.Parent         = lp:WaitForChild("PlayerGui")
 
+-- MAIN FRAME — fixed width, height dibatasi
 local main = Instance.new("Frame")
 main.Name                   = "Main"
-main.Size                   = UDim2.new(0, 210, 0, 0)
+main.Size                   = UDim2.new(0, 214, 0, 0)
 main.Position               = UDim2.new(0, 12, 0, 80)
 main.BackgroundColor3       = Color3.fromRGB(14, 14, 14)
 main.BackgroundTransparency = 0.06
 main.BorderSizePixel        = 0
 main.AutomaticSize          = Enum.AutomaticSize.Y
 main.Parent                 = sg
-Instance.new("UICorner", main).CornerRadius = UDim.new(0, 8)
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
 local ms = Instance.new("UIStroke", main)
 ms.Color = Color3.fromRGB(55,55,55); ms.Thickness = 0.8
 local mainL = Instance.new("UIListLayout", main)
@@ -564,53 +420,109 @@ mainL.FillDirection = Enum.FillDirection.Vertical
 mainL.SortOrder     = Enum.SortOrder.LayoutOrder
 mainL.Padding       = UDim.new(0, 0)
 
--- HEADER
+-- ================================================
+-- HEADER — dengan tombol N bulat
+-- ================================================
 local header = Instance.new("Frame", main)
-header.Size             = UDim2.new(1,0,0,28)
-header.BackgroundColor3 = Color3.fromRGB(22,22,22)
-header.BorderSizePixel  = 0; header.LayoutOrder = 0
-Instance.new("UICorner", header).CornerRadius = UDim.new(0,8)
+header.Name             = "Header"
+header.Size             = UDim2.new(1, 0, 0, 34)
+header.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+header.BorderSizePixel  = 0
+header.LayoutOrder      = 0
+Instance.new("UICorner", header).CornerRadius = UDim.new(0, 10)
+
+-- fix bottom rounded corners header
 local hFix = Instance.new("Frame", header)
-hFix.Size = UDim2.new(1,0,0.5,0); hFix.Position = UDim2.new(0,0,0.5,0)
-hFix.BackgroundColor3 = Color3.fromRGB(22,22,22); hFix.BorderSizePixel = 0
+hFix.Size             = UDim2.new(1, 0, 0.5, 0)
+hFix.Position         = UDim2.new(0, 0, 0.5, 0)
+hFix.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+hFix.BorderSizePixel  = 0
 
+-- dot hijau
 local dot = Instance.new("Frame", header)
-dot.Size = UDim2.new(0,7,0,7); dot.Position = UDim2.new(0,8,0.5,-3)
-dot.BackgroundColor3 = Color3.fromRGB(0,255,136); dot.BorderSizePixel = 0
-Instance.new("UICorner", dot).CornerRadius = UDim.new(1,0)
+dot.Size             = UDim2.new(0, 7, 0, 7)
+dot.Position         = UDim2.new(0, 10, 0.5, -3)
+dot.BackgroundColor3 = Color3.fromRGB(0, 255, 136)
+dot.BorderSizePixel  = 0
+Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
 
+-- title
 local titleLbl = Instance.new("TextLabel", header)
-titleLbl.Text="NONO LAG NUKE"; titleLbl.Font=Enum.Font.Code
-titleLbl.TextSize=10; titleLbl.TextColor3=Color3.fromRGB(200,200,200)
-titleLbl.BackgroundTransparency=1; titleLbl.Size=UDim2.new(1,-60,1,0)
-titleLbl.Position=UDim2.new(0,20,0,0)
-titleLbl.TextXAlignment=Enum.TextXAlignment.Left
+titleLbl.Text                   = "NONO LAG NUKE"
+titleLbl.Font                   = Enum.Font.Code
+titleLbl.TextSize               = 10
+titleLbl.TextColor3             = Color3.fromRGB(200, 200, 200)
+titleLbl.BackgroundTransparency = 1
+titleLbl.Size                   = UDim2.new(1, -62, 1, 0)
+titleLbl.Position               = UDim2.new(0, 22, 0, 0)
+titleLbl.TextXAlignment         = Enum.TextXAlignment.Left
 
-local toggleBtn = Instance.new("TextButton", header)
-toggleBtn.Text="▼"; toggleBtn.Font=Enum.Font.Code; toggleBtn.TextSize=10
-toggleBtn.TextColor3=Color3.fromRGB(150,150,150)
-toggleBtn.BackgroundColor3=Color3.fromRGB(35,35,35)
-toggleBtn.Size=UDim2.new(0,28,0,18); toggleBtn.Position=UDim2.new(1,-34,0.5,-9)
-toggleBtn.BorderSizePixel=0
-Instance.new("UICorner",toggleBtn).CornerRadius=UDim.new(0,4)
+-- [NEW] Tombol N — bulat kecil
+local nBtn = Instance.new("TextButton", header)
+nBtn.Text             = "N"
+nBtn.Font             = Enum.Font.GothamBold
+nBtn.TextSize         = 11
+nBtn.TextColor3       = Color3.fromRGB(0, 255, 136)
+nBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+nBtn.Size             = UDim2.new(0, 24, 0, 24)
+nBtn.Position         = UDim2.new(1, -30, 0.5, -12)
+nBtn.BorderSizePixel  = 0
+nBtn.ZIndex           = 5
+Instance.new("UICorner", nBtn).CornerRadius = UDim.new(1, 0)  -- bulat penuh
+local nBtnStroke = Instance.new("UIStroke", nBtn)
+nBtnStroke.Color     = Color3.fromRGB(0, 180, 90)
+nBtnStroke.Thickness = 1
 
--- BODY
-local body = Instance.new("Frame", main)
-body.Size=UDim2.new(1,0,0,0); body.BackgroundTransparency=1
-body.AutomaticSize=Enum.AutomaticSize.Y
-body.BorderSizePixel=0; body.LayoutOrder=1
+-- ================================================
+-- BODY WRAPPER — fixed height dengan scroll
+-- ================================================
+local bodyWrapper = Instance.new("Frame", main)
+bodyWrapper.Name             = "BodyWrapper"
+bodyWrapper.Size             = UDim2.new(1, 0, 0, 340) -- max height sebelum scroll
+bodyWrapper.BackgroundTransparency = 1
+bodyWrapper.BorderSizePixel  = 0
+bodyWrapper.LayoutOrder      = 1
+bodyWrapper.ClipsDescendants = true
+
+-- [NEW] ScrollingFrame
+local scrollFrame = Instance.new("ScrollingFrame", bodyWrapper)
+scrollFrame.Name                       = "Scroll"
+scrollFrame.Size                       = UDim2.new(1, 0, 1, 0)
+scrollFrame.Position                   = UDim2.new(0, 0, 0, 0)
+scrollFrame.BackgroundTransparency     = 1
+scrollFrame.BorderSizePixel            = 0
+scrollFrame.ScrollBarThickness         = 3
+scrollFrame.ScrollBarImageColor3       = Color3.fromRGB(0, 200, 100)
+scrollFrame.ScrollBarImageTransparency = 0.3
+scrollFrame.CanvasSize                 = UDim2.new(0, 0, 0, 0)  -- auto below
+scrollFrame.AutomaticCanvasSize        = Enum.AutomaticSize.Y
+scrollFrame.ScrollingDirection         = Enum.ScrollingDirection.Y
+scrollFrame.ElasticBehavior            = Enum.ElasticBehavior.Never
+scrollFrame.ClipsDescendants           = true
+
+-- layout inside scroll
+local body = scrollFrame  -- alias biar kode di bawah sama
+
 local bodyL = Instance.new("UIListLayout", body)
-bodyL.FillDirection=Enum.FillDirection.Vertical
-bodyL.SortOrder=Enum.SortOrder.LayoutOrder; bodyL.Padding=UDim.new(0,4)
-local bPad = Instance.new("UIPadding", body)
-bPad.PaddingTop=UDim.new(0,6); bPad.PaddingBottom=UDim.new(0,6)
-bPad.PaddingLeft=UDim.new(0,8); bPad.PaddingRight=UDim.new(0,8)
+bodyL.FillDirection = Enum.FillDirection.Vertical
+bodyL.SortOrder     = Enum.SortOrder.LayoutOrder
+bodyL.Padding       = UDim.new(0, 4)
 
+local bodyPad = Instance.new("UIPadding", body)
+bodyPad.PaddingTop    = UDim.new(0, 6)
+bodyPad.PaddingBottom = UDim.new(0, 8)
+bodyPad.PaddingLeft   = UDim.new(0, 8)
+bodyPad.PaddingRight  = UDim.new(0, 10) -- +2 buat scrollbar
+
+-- ================================================
 -- FPS ROW
+-- ================================================
 local fpsRow = Instance.new("Frame", body)
-fpsRow.Size=UDim2.new(1,0,0,38); fpsRow.BackgroundColor3=Color3.fromRGB(18,18,18)
-fpsRow.BorderSizePixel=0; fpsRow.LayoutOrder=0
-Instance.new("UICorner",fpsRow).CornerRadius=UDim.new(0,5)
+fpsRow.Size             = UDim2.new(1, 0, 0, 38)
+fpsRow.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+fpsRow.BorderSizePixel  = 0
+fpsRow.LayoutOrder      = 0
+Instance.new("UICorner", fpsRow).CornerRadius = UDim.new(0, 6)
 
 local function makeCol(parent, xPos, w)
     local f = Instance.new("Frame", parent)
@@ -628,7 +540,7 @@ local function makeLabel(parent, text, size, color, yPos, h)
 end
 
 local bCol = makeCol(fpsRow, 0, 0.5)
-makeLabel(bCol,"BEFORE",7,Color3.fromRGB(100,100,100),4,13)
+makeLabel(bCol,"BEFORE",7,Color3.fromRGB(100,100,100),5,12)
 local fpsBeforeVal = makeLabel(bCol,"-- fps",13,Color3.fromRGB(200,100,80),18,16)
 
 local fdiv = Instance.new("Frame", fpsRow)
@@ -636,108 +548,107 @@ fdiv.Size=UDim2.new(0,1,0.55,0); fdiv.Position=UDim2.new(0.5,0,0.225,0)
 fdiv.BackgroundColor3=Color3.fromRGB(50,50,50); fdiv.BorderSizePixel=0
 
 local aCol = makeCol(fpsRow, 0.5, 0.5)
-makeLabel(aCol,"AFTER",7,Color3.fromRGB(100,100,100),4,13)
+makeLabel(aCol,"AFTER",7,Color3.fromRGB(100,100,100),5,12)
 local fpsAfterVal = makeLabel(aCol,"-- fps",13,Color3.fromRGB(100,100,100),18,16)
 
--- Live FPS update
+-- live fps update
 local fTick = 0
 trackConn(RunService.RenderStepped:Connect(function()
-    fTick += 1; if fTick % 15 ~= 0 then return end
+    fTick+=1; if fTick%15~=0 then return end
     local fps = currentFPS
     if not applied then
-        fpsBeforeVal.Text       = fps.." fps"
-        fpsBeforeVal.TextColor3 = colorFPS(fps)
+        fpsBeforeVal.Text=fps.." fps"; fpsBeforeVal.TextColor3=colorFPS(fps)
     else
-        fpsAfterVal.Text        = fps.." fps"
-        fpsAfterVal.TextColor3  = colorFPS(fps)
+        fpsAfterVal.Text=fps.." fps";  fpsAfterVal.TextColor3=colorFPS(fps)
     end
 end))
 
--- PLAYER COUNT ROW (NEW — info rame player)
+-- PLAYER COUNT ROW
 local plrRow = Instance.new("Frame", body)
 plrRow.Size=UDim2.new(1,0,0,20); plrRow.BackgroundColor3=Color3.fromRGB(18,18,18)
 plrRow.BorderSizePixel=0; plrRow.LayoutOrder=1
-Instance.new("UICorner",plrRow).CornerRadius=UDim.new(0,5)
+Instance.new("UICorner",plrRow).CornerRadius=UDim.new(0,6)
 
-local plrLbl = Instance.new("TextLabel", plrRow)
+local plrLbl = Instance.new("TextLabel",plrRow)
 plrLbl.Text="Players"; plrLbl.Font=Enum.Font.Code; plrLbl.TextSize=9
 plrLbl.TextColor3=Color3.fromRGB(100,100,100); plrLbl.BackgroundTransparency=1
 plrLbl.Size=UDim2.new(0.5,0,1,0); plrLbl.Position=UDim2.new(0,6,0,0)
 plrLbl.TextXAlignment=Enum.TextXAlignment.Left
 
-local plrVal = Instance.new("TextLabel", plrRow)
+local plrVal = Instance.new("TextLabel",plrRow)
 plrVal.Text="1 online"; plrVal.Font=Enum.Font.Code; plrVal.TextSize=9
 plrVal.TextColor3=Color3.fromRGB(120,180,255); plrVal.BackgroundTransparency=1
 plrVal.Size=UDim2.new(0.5,-6,1,0); plrVal.Position=UDim2.new(0.5,0,0,0)
 plrVal.TextXAlignment=Enum.TextXAlignment.Right
 
--- Update player count
-local pTick = 0
+local pTick=0
 trackConn(RunService.Heartbeat:Connect(function()
-    pTick += 1; if pTick % 60 ~= 0 then return end
-    local count = #Players:GetPlayers()
-    plrVal.Text = count.." online"
-    plrVal.TextColor3 = count > 10 and Color3.fromRGB(220,130,60)
-        or count > 5 and Color3.fromRGB(220,200,60)
+    pTick+=1; if pTick%60~=0 then return end
+    local c=#Players:GetPlayers()
+    plrVal.Text=c.." online"
+    plrVal.TextColor3=c>10 and Color3.fromRGB(220,130,60)
+        or c>5 and Color3.fromRGB(220,200,60)
         or Color3.fromRGB(120,180,255)
 end))
 
--- FPS CAP SLIDER
+-- ================================================
+-- SLIDER BUILDER
+-- ================================================
 local function makeSlider(parent, order, labelText, initVal, minV, maxV, color, snapTo)
     local frame = Instance.new("Frame", parent)
-    frame.Size=UDim2.new(1,0,0,42); frame.BackgroundColor3=Color3.fromRGB(20,20,20)
+    frame.Size=UDim2.new(1,0,0,44); frame.BackgroundColor3=Color3.fromRGB(20,20,20)
     frame.BorderSizePixel=0; frame.LayoutOrder=order
-    Instance.new("UICorner",frame).CornerRadius=UDim.new(0,5)
-    local pad = Instance.new("UIPadding",frame)
-    pad.PaddingLeft=UDim.new(0,7); pad.PaddingRight=UDim.new(0,7)
-    pad.PaddingTop=UDim.new(0,5);  pad.PaddingBottom=UDim.new(0,5)
-    local fl = Instance.new("UIListLayout",frame)
-    fl.FillDirection=Enum.FillDirection.Vertical; fl.Padding=UDim.new(0,4)
+    Instance.new("UICorner",frame).CornerRadius=UDim.new(0,6)
+    local pad=Instance.new("UIPadding",frame)
+    pad.PaddingLeft=UDim.new(0,8); pad.PaddingRight=UDim.new(0,8)
+    pad.PaddingTop=UDim.new(0,6);  pad.PaddingBottom=UDim.new(0,6)
+    local fl=Instance.new("UIListLayout",frame)
+    fl.FillDirection=Enum.FillDirection.Vertical; fl.Padding=UDim.new(0,5)
 
-    local topRow = Instance.new("Frame",frame)
+    local topRow=Instance.new("Frame",frame)
     topRow.Size=UDim2.new(1,0,0,12); topRow.BackgroundTransparency=1
 
-    local lbl = Instance.new("TextLabel",topRow)
+    local lbl=Instance.new("TextLabel",topRow)
     lbl.Text=labelText; lbl.Font=Enum.Font.Code; lbl.TextSize=9
-    lbl.TextColor3=Color3.fromRGB(180,180,180); lbl.BackgroundTransparency=1
+    lbl.TextColor3=Color3.fromRGB(170,170,170); lbl.BackgroundTransparency=1
     lbl.Size=UDim2.new(0.6,0,1,0); lbl.TextXAlignment=Enum.TextXAlignment.Left
 
-    local valLbl = Instance.new("TextLabel",topRow)
+    local valLbl=Instance.new("TextLabel",topRow)
     valLbl.Text=tostring(initVal); valLbl.Font=Enum.Font.Code; valLbl.TextSize=9
     valLbl.TextColor3=color; valLbl.BackgroundTransparency=1
     valLbl.Size=UDim2.new(0.4,0,1,0); valLbl.Position=UDim2.new(0.6,0,0,0)
     valLbl.TextXAlignment=Enum.TextXAlignment.Right
 
-    local track = Instance.new("Frame",frame)
-    track.Size=UDim2.new(1,0,0,6); track.BackgroundColor3=Color3.fromRGB(40,40,40)
+    local track=Instance.new("Frame",frame)
+    track.Size=UDim2.new(1,0,0,6); track.BackgroundColor3=Color3.fromRGB(38,38,38)
     track.BorderSizePixel=0
     Instance.new("UICorner",track).CornerRadius=UDim.new(1,0)
 
-    local fill = Instance.new("Frame",track)
-    local initPct = (initVal-minV)/(maxV-minV)
-    fill.Size=UDim2.new(initPct,0,1,0); fill.BackgroundColor3=color
+    local fill=Instance.new("Frame",track)
+    local ip=(initVal-minV)/(maxV-minV)
+    fill.Size=UDim2.new(ip,0,1,0); fill.BackgroundColor3=color
     fill.BorderSizePixel=0
     Instance.new("UICorner",fill).CornerRadius=UDim.new(1,0)
 
-    local thumb = Instance.new("TextButton",track)
+    local thumb=Instance.new("TextButton",track)
     thumb.Size=UDim2.new(0,16,0,16); thumb.AnchorPoint=Vector2.new(0.5,0.5)
-    thumb.Position=UDim2.new(initPct,0,0.5,0)
-    thumb.BackgroundColor3=Color3.fromRGB(255,255,255)
+    thumb.Position=UDim2.new(ip,0,0.5,0)
+    thumb.BackgroundColor3=Color3.fromRGB(240,240,240)
     thumb.Text=""; thumb.BorderSizePixel=0; thumb.ZIndex=10
     Instance.new("UICorner",thumb).CornerRadius=UDim.new(1,0)
 
-    local dragging = false
+    local isDragging = false
     local currentVal = initVal
 
     local function setValue(raw)
-        local snapped = snapTo and math.floor(raw/snapTo)*snapTo or math.floor(raw)
-        snapped = math.clamp(snapped, minV, maxV)
-        currentVal = snapped
-        local pct = (snapped-minV)/(maxV-minV)
+        local s = snapTo and math.floor(raw/snapTo)*snapTo or math.floor(raw)
+        s = math.clamp(s, minV, maxV)
+        currentVal = s
+        local pct = (s-minV)/(maxV-minV)
         fill.Size=UDim2.new(pct,0,1,0)
         thumb.Position=UDim2.new(pct,0,0.5,0)
-        valLbl.Text=tostring(snapped)
-        return snapped
+        valLbl.Text=tostring(s)
+        return s
     end
 
     local function posToVal(xPos)
@@ -745,44 +656,41 @@ local function makeSlider(parent, order, labelText, initVal, minV, maxV, color, 
         return minV + math.clamp((xPos-abs.X)/sz.X,0,1)*(maxV-minV)
     end
 
-    thumb.MouseButton1Down:Connect(function() dragging=true end)
+    thumb.MouseButton1Down:Connect(function() isDragging=true end)
     track.InputBegan:Connect(function(i)
         if i.UserInputType==Enum.UserInputType.MouseButton1
         or i.UserInputType==Enum.UserInputType.Touch then
-            dragging=true
-            setValue(posToVal(i.Position.X))
+            isDragging=true; setValue(posToVal(i.Position.X))
         end
     end)
 
-    return frame, track, thumb, setValue, posToVal,
-           function() return dragging end,
-           function(v) dragging=v end,
+    return frame, track, setValue, posToVal,
+           function() return isDragging end,
+           function(v) isDragging=v end,
            function() return currentVal end
 end
 
-local capFrame, capTrack, capThumb, setCapVal, capPosToVal,
-      getCapDrag, setCapDrag, getCapVal =
+local _, capTrack, setCapVal, capPosToVal, getCapDrag, setCapDrag, getCapVal =
     makeSlider(body, 2, "FPS Cap (bypass)", fpsCapValue, 30, 300,
                Color3.fromRGB(120,180,255), 5)
 
-local rdFrame, rdTrack, rdThumb, setRDVal, rdPosToVal,
-      getRDDrag, setRDDrag, getRDVal =
+local _, rdTrack, setRDVal, rdPosToVal, getRDDrag, setRDDrag, getRDVal =
     makeSlider(body, 3, "Render Distance", renderDist, 64, 1024,
                Color3.fromRGB(0,200,100), 64)
 
 -- STATUS ROW
-local statusRow = Instance.new("Frame", body)
-statusRow.Size=UDim2.new(1,0,0,20); statusRow.BackgroundColor3=Color3.fromRGB(20,20,20)
+local statusRow=Instance.new("Frame",body)
+statusRow.Size=UDim2.new(1,0,0,20); statusRow.BackgroundColor3=Color3.fromRGB(18,18,18)
 statusRow.BorderSizePixel=0; statusRow.LayoutOrder=4
-Instance.new("UICorner",statusRow).CornerRadius=UDim.new(0,5)
+Instance.new("UICorner",statusRow).CornerRadius=UDim.new(0,6)
 
-local sLbl = Instance.new("TextLabel",statusRow)
+local sLbl=Instance.new("TextLabel",statusRow)
 sLbl.Text="STATUS"; sLbl.Font=Enum.Font.Code; sLbl.TextSize=9
 sLbl.TextColor3=Color3.fromRGB(100,100,100); sLbl.BackgroundTransparency=1
 sLbl.Size=UDim2.new(0.5,0,1,0); sLbl.Position=UDim2.new(0,6,0,0)
 sLbl.TextXAlignment=Enum.TextXAlignment.Left
 
-local statusVal = Instance.new("TextLabel",statusRow)
+local statusVal=Instance.new("TextLabel",statusRow)
 statusVal.Text="● READY"; statusVal.Font=Enum.Font.Code; statusVal.TextSize=9
 statusVal.TextColor3=Color3.fromRGB(0,255,136); statusVal.BackgroundTransparency=1
 statusVal.Size=UDim2.new(0.5,-6,1,0); statusVal.Position=UDim2.new(0.5,0,0,0)
@@ -790,80 +698,98 @@ statusVal.TextXAlignment=Enum.TextXAlignment.Right
 
 -- TOGGLE ROWS
 local function makeToggleRow(label, key, order)
-    local row = Instance.new("Frame",body)
-    row.Size=UDim2.new(1,0,0,22); row.BackgroundColor3=Color3.fromRGB(20,20,20)
+    local row=Instance.new("Frame",body)
+    row.Size=UDim2.new(1,0,0,26); row.BackgroundColor3=Color3.fromRGB(20,20,20)
     row.BorderSizePixel=0; row.LayoutOrder=order
-    Instance.new("UICorner",row).CornerRadius=UDim.new(0,5)
+    Instance.new("UICorner",row).CornerRadius=UDim.new(0,6)
 
-    local lbl = Instance.new("TextLabel",row)
+    local lbl=Instance.new("TextLabel",row)
     lbl.Text=label; lbl.Font=Enum.Font.Code; lbl.TextSize=9
     lbl.TextColor3=Color3.fromRGB(180,180,180); lbl.BackgroundTransparency=1
-    lbl.Size=UDim2.new(1,-40,1,0); lbl.Position=UDim2.new(0,7,0,0)
+    lbl.Size=UDim2.new(1,-44,1,0); lbl.Position=UDim2.new(0,8,0,0)
     lbl.TextXAlignment=Enum.TextXAlignment.Left
 
-    local pill = Instance.new("Frame",row)
-    pill.Size=UDim2.new(0,26,0,13); pill.Position=UDim2.new(1,-32,0.5,-6)
-    pill.BackgroundColor3=state[key] and Color3.fromRGB(0,200,100) or Color3.fromRGB(60,60,60)
+    local pill=Instance.new("Frame",row)
+    pill.Size=UDim2.new(0,28,0,14); pill.Position=UDim2.new(1,-34,0.5,-7)
+    pill.BackgroundColor3=state[key] and Color3.fromRGB(0,200,100) or Color3.fromRGB(55,55,55)
     pill.BorderSizePixel=0
     Instance.new("UICorner",pill).CornerRadius=UDim.new(1,0)
 
-    local thumb = Instance.new("Frame",pill)
-    thumb.Size=UDim2.new(0,9,0,9)
-    thumb.Position=state[key] and UDim2.new(1,-11,0.5,-4) or UDim2.new(0,2,0.5,-4)
+    local thumb=Instance.new("Frame",pill)
+    thumb.Size=UDim2.new(0,10,0,10)
+    thumb.Position=state[key] and UDim2.new(1,-12,0.5,-5) or UDim2.new(0,2,0.5,-5)
     thumb.BackgroundColor3=Color3.fromRGB(255,255,255); thumb.BorderSizePixel=0
     Instance.new("UICorner",thumb).CornerRadius=UDim.new(1,0)
 
-    local btn = Instance.new("TextButton",row)
+    local btn=Instance.new("TextButton",row)
     btn.Size=UDim2.new(1,0,1,0); btn.BackgroundTransparency=1
     btn.Text=""; btn.ZIndex=5
 
     btn.MouseButton1Click:Connect(function()
-        state[key] = not state[key]
+        state[key]=not state[key]
         TweenService:Create(pill,TweenInfo.new(0.12),{
-            BackgroundColor3=state[key] and Color3.fromRGB(0,200,100) or Color3.fromRGB(60,60,60)
+            BackgroundColor3=state[key] and Color3.fromRGB(0,200,100) or Color3.fromRGB(55,55,55)
         }):Play()
         TweenService:Create(thumb,TweenInfo.new(0.12),{
-            Position=state[key] and UDim2.new(1,-11,0.5,-4) or UDim2.new(0,2,0.5,-4)
+            Position=state[key] and UDim2.new(1,-12,0.5,-5) or UDim2.new(0,2,0.5,-5)
         }):Play()
     end)
 end
 
-makeToggleRow("Nuke Texture",  "texture", 5)
-makeToggleRow("Kill Shadow",   "shadow",  6)
-makeToggleRow("Hide Leaves",   "leaf",    7)
-makeToggleRow("Kill FX",       "fx",      8)
-makeToggleRow("Anchor Parts",  "anchor",  9)
-makeToggleRow("Kill Skybox",   "sky",     10)
+makeToggleRow("Nuke Texture", "texture", 5)
+makeToggleRow("Kill Shadow",  "shadow",  6)
+makeToggleRow("Hide Leaves",  "leaf",    7)
+makeToggleRow("Kill FX",      "fx",      8)
+makeToggleRow("Anchor Parts", "anchor",  9)
+makeToggleRow("Kill Skybox",  "sky",     10)
 
-local applyBtn = Instance.new("TextButton",body)
+-- APPLY BUTTON
+local applyBtn=Instance.new("TextButton",body)
 applyBtn.Text="⚡ APPLY NUKE"; applyBtn.Font=Enum.Font.Code; applyBtn.TextSize=10
 applyBtn.TextColor3=Color3.fromRGB(0,0,0)
 applyBtn.BackgroundColor3=Color3.fromRGB(0,220,110)
-applyBtn.Size=UDim2.new(1,0,0,24); applyBtn.BorderSizePixel=0; applyBtn.LayoutOrder=11
+applyBtn.Size=UDim2.new(1,0,0,28); applyBtn.BorderSizePixel=0; applyBtn.LayoutOrder=11
 Instance.new("UICorner",applyBtn).CornerRadius=UDim.new(0,6)
 
-local logBox = Instance.new("TextLabel",body)
+-- LOG BOX
+local logBox=Instance.new("TextLabel",body)
 logBox.Text="ready."; logBox.Font=Enum.Font.Code; logBox.TextSize=8
 logBox.TextColor3=Color3.fromRGB(80,80,80); logBox.BackgroundColor3=Color3.fromRGB(8,8,8)
 logBox.Size=UDim2.new(1,0,0,28); logBox.TextWrapped=true
 logBox.TextXAlignment=Enum.TextXAlignment.Left
 logBox.BorderSizePixel=0; logBox.LayoutOrder=12
 Instance.new("UICorner",logBox).CornerRadius=UDim.new(0,5)
-local lbPad=Instance.new("UIPadding",logBox)
-lbPad.PaddingLeft=UDim.new(0,5); lbPad.PaddingTop=UDim.new(0,3)
-lbPad.PaddingRight=UDim.new(0,5)
+local lbP=Instance.new("UIPadding",logBox)
+lbP.PaddingLeft=UDim.new(0,5); lbP.PaddingTop=UDim.new(0,3); lbP.PaddingRight=UDim.new(0,5)
 
 local function log(msg) logBox.Text="> "..msg end
 
--- OPEN/CLOSE
-local bodyOpen = true
-toggleBtn.MouseButton1Click:Connect(function()
-    bodyOpen=not bodyOpen; body.Visible=bodyOpen
-    toggleBtn.Text=bodyOpen and "▼" or "▲"
+-- ================================================
+-- N BUTTON — open/close toggle
+-- ================================================
+local bodyVisible = true
+
+nBtn.MouseButton1Click:Connect(function()
+    bodyVisible = not bodyVisible
+    bodyWrapper.Visible = bodyVisible
+
+    -- animasi dot & stroke
+    local targetColor = bodyVisible
+        and Color3.fromRGB(0,255,136)
+        or  Color3.fromRGB(120,120,120)
+    TweenService:Create(dot, TweenInfo.new(0.15), {
+        BackgroundColor3 = targetColor
+    }):Play()
+    TweenService:Create(nBtnStroke, TweenInfo.new(0.15), {
+        Color = bodyVisible and Color3.fromRGB(0,180,90) or Color3.fromRGB(80,80,80)
+    }):Play()
+    TweenService:Create(nBtn, TweenInfo.new(0.15), {
+        TextColor3 = targetColor
+    }):Play()
 end)
 
 -- ================================================
--- DRAG — FIXED, ISOLATED, DEADZONE
+-- DRAG — header only, deadzone, isolated
 -- ================================================
 local dragActive = false
 local dragStart  = nil
@@ -871,55 +797,57 @@ local dragOrigin = nil
 local DEADZONE   = 8
 
 header.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-    or input.UserInputType == Enum.UserInputType.Touch then
-        -- pastiin bukan dari toggleBtn
-        dragStart  = input.Position
+    if input.UserInputType==Enum.UserInputType.MouseButton1
+    or input.UserInputType==Enum.UserInputType.Touch then
+        -- ignore kalau klik nBtn
+        local pos   = input.Position
+        local nbAbs = nBtn.AbsolutePosition
+        local nbSz  = nBtn.AbsoluteSize
+        local onBtn = pos.X >= nbAbs.X and pos.X <= nbAbs.X+nbSz.X
+                   and pos.Y >= nbAbs.Y and pos.Y <= nbAbs.Y+nbSz.Y
+        if onBtn then return end
+
+        dragStart  = pos
         dragOrigin = main.Position
         dragActive = false
     end
 end)
 
 header.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-    or input.UserInputType == Enum.UserInputType.Touch then
-        dragActive = false; dragStart = nil
+    if input.UserInputType==Enum.UserInputType.MouseButton1
+    or input.UserInputType==Enum.UserInputType.Touch then
+        dragActive=false; dragStart=nil
     end
 end)
 
 trackConn(UserInputService.InputChanged:Connect(function(input)
-    -- SLIDER CAP
     if getCapDrag() then
         if input.UserInputType==Enum.UserInputType.MouseMovement
         or input.UserInputType==Enum.UserInputType.Touch then
-            local v = setCapVal(capPosToVal(input.Position.X))
-            fpsCapValue = v
+            local v=setCapVal(capPosToVal(input.Position.X))
+            fpsCapValue=v
             pcall(function() if HAS_SETFPSCAP then setfpscap(v) end end)
-        end
-        return
+        end; return
     end
-    -- SLIDER RD
     if getRDDrag() then
         if input.UserInputType==Enum.UserInputType.MouseMovement
         or input.UserInputType==Enum.UserInputType.Touch then
-            local v = setRDVal(rdPosToVal(input.Position.X))
-            renderDist = v
-        end
-        return
+            local v=setRDVal(rdPosToVal(input.Position.X))
+            renderDist=v
+        end; return
     end
-    -- DRAG
     if dragStart then
         if input.UserInputType==Enum.UserInputType.MouseMovement
         or input.UserInputType==Enum.UserInputType.Touch then
-            local delta = input.Position - dragStart
+            local delta=input.Position-dragStart
             if not dragActive and
-               (math.abs(delta.X) > DEADZONE or math.abs(delta.Y) > DEADZONE) then
-                dragActive = true
+               (math.abs(delta.X)>DEADZONE or math.abs(delta.Y)>DEADZONE) then
+                dragActive=true
             end
             if dragActive and dragOrigin then
-                main.Position = UDim2.new(
-                    dragOrigin.X.Scale, dragOrigin.X.Offset + delta.X,
-                    dragOrigin.Y.Scale, dragOrigin.Y.Offset + delta.Y
+                main.Position=UDim2.new(
+                    dragOrigin.X.Scale, dragOrigin.X.Offset+delta.X,
+                    dragOrigin.Y.Scale, dragOrigin.Y.Offset+delta.Y
                 )
             end
         end
@@ -939,39 +867,29 @@ end))
 -- ================================================
 applyBtn.MouseButton1Click:Connect(function()
     if not applied then
-        local b = currentFPS
-        fpsBeforeVal.Text       = b.." fps"
-        fpsBeforeVal.TextColor3 = colorFPS(b)
+        local b=currentFPS
+        fpsBeforeVal.Text=b.." fps"; fpsBeforeVal.TextColor3=colorFPS(b)
     end
-
-    statusVal.Text            = "● RUNNING"
-    statusVal.TextColor3      = Color3.fromRGB(255,180,0)
-    applyBtn.Text             = "..."
-    applyBtn.BackgroundColor3 = Color3.fromRGB(30,30,30)
-    applyBtn.TextColor3       = Color3.fromRGB(0,220,110)
+    statusVal.Text="● RUNNING"; statusVal.TextColor3=Color3.fromRGB(255,180,0)
+    applyBtn.Text="..."; applyBtn.BackgroundColor3=Color3.fromRGB(30,30,30)
+    applyBtn.TextColor3=Color3.fromRGB(0,220,110)
 
     task.spawn(function()
-        -- FPS CAP
-        local capOk = tryFPSCap(fpsCapValue)
-        log("fps cap " .. fpsCapValue .. (capOk and " ✓" or " (no setfpscap)"))
+        local capOk=tryFPSCap(fpsCapValue)
+        log("fps cap "..fpsCapValue..(capOk and " ✓" or " (no executor)"))
 
-        -- GRAPHICS QUALITY
-        pcall(function()
-            settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
-        end)
+        pcall(function() settings().Rendering.QualityLevel=Enum.QualityLevel.Level01 end)
 
-        -- HIDDEN PROPS
-        tryHidden(Lighting, "Technology", Enum.Technology.Compatibility)
-        tryHidden(Lighting, "ShadowSoftness", 0)
-        tryHidden(workspace, "MeshPartHeads", false)
-        tryHidden(workspace, "StreamingMinRadius", 64)
-        tryHidden(workspace, "StreamingTargetRadius", renderDist)
+        tryHidden(Lighting,"Technology",Enum.Technology.Compatibility)
+        tryHidden(Lighting,"ShadowSoftness",0)
+        tryHidden(workspace,"MeshPartHeads",false)
+        tryHidden(workspace,"StreamingMinRadius",64)
+        tryHidden(workspace,"StreamingTargetRadius",renderDist)
 
-        -- LIGHTING
         if state.shadow then
             log("killing shadows...")
-            pcall(function() Lighting.GlobalShadows = false end)
-            for _, v in ipairs(Lighting:GetChildren()) do
+            pcall(function() Lighting.GlobalShadows=false end)
+            for _,v in ipairs(Lighting:GetChildren()) do
                 pcall(function()
                     if v:IsA("BlurEffect") or v:IsA("ColorCorrectionEffect")
                     or v:IsA("SunRaysEffect") or v:IsA("BloomEffect")
@@ -982,7 +900,7 @@ applyBtn.MouseButton1Click:Connect(function()
             end
         end
 
-        for _, v in ipairs(Lighting:GetChildren()) do
+        for _,v in ipairs(Lighting:GetChildren()) do
             pcall(function()
                 if v:IsA("Atmosphere") then
                     v.Density=0; v.Glare=0; v.Haze=0; v.Offset=0
@@ -991,43 +909,37 @@ applyBtn.MouseButton1Click:Connect(function()
         end
 
         if state.sky then
-            for _, v in ipairs(Lighting:GetChildren()) do
+            for _,v in ipairs(Lighting:GetChildren()) do
                 pcall(function() if v:IsA("Sky") then v:Destroy() end end)
             end
         end
 
-        -- TERRAIN
         pcall(function()
-            local t = workspace:FindFirstChildOfClass("Terrain")
+            local t=workspace:FindFirstChildOfClass("Terrain")
             if t then
                 t.WaterWaveSize=0; t.WaterWaveSpeed=0
                 t.WaterReflectance=0; t.WaterTransparency=0
             end
         end)
 
-        -- WORLD SCAN — batched
-        log("scanning world...")
-        local list  = workspace:GetDescendants()
-        local total = 0
-        for i = 1, #list, CFG.batchSize do
-            for j = i, math.min(i+CFG.batchSize-1, #list) do
+        log("nuking world...")
+        local list=workspace:GetDescendants()
+        local total=0
+        for i=1,#list,CFG.batchSize do
+            for j=i,math.min(i+CFG.batchSize-1,#list) do
                 nukeWorldObject(list[j]); total+=1
             end
             task.wait()
         end
 
-        -- PLAYER OPTIMIZATION
-        log("optimizing " .. #Players:GetPlayers() .. " players...")
+        log("optimizing players...")
         setupPlayerOptimization()
 
-        -- RENDER DISTANCE
-        log("render dist " .. renderDist .. "...")
-        local hidden = applyRenderDistOnce()
+        log("render dist "..renderDist.."...")
+        local hidden=applyRenderDistOnce()
 
-        -- START ADAPTIVE
         startAdaptiveSystem(logBox, statusVal)
 
-        -- PLAYER LOD TIMER — tiap 5 detik, lightweight
         task.spawn(function()
             while applied do
                 task.wait(5)
@@ -1036,17 +948,14 @@ applyBtn.MouseButton1Click:Connect(function()
         end)
 
         task.wait(1)
-        applied = true
-        local af = currentFPS
-        fpsAfterVal.Text       = af.." fps"
-        fpsAfterVal.TextColor3 = colorFPS(af)
-
+        applied=true
+        local af=currentFPS
+        fpsAfterVal.Text=af.." fps"; fpsAfterVal.TextColor3=colorFPS(af)
         log(total.." obj | "..hidden.." hidden ✓")
-        statusVal.Text            = "● ACTIVE"
-        statusVal.TextColor3      = Color3.fromRGB(0,255,136)
-        applyBtn.Text             = "⚡ RE-APPLY"
-        applyBtn.BackgroundColor3 = Color3.fromRGB(0,220,110)
-        applyBtn.TextColor3       = Color3.fromRGB(0,0,0)
+        statusVal.Text="● ACTIVE"; statusVal.TextColor3=Color3.fromRGB(0,255,136)
+        applyBtn.Text="⚡ RE-APPLY"
+        applyBtn.BackgroundColor3=Color3.fromRGB(0,220,110)
+        applyBtn.TextColor3=Color3.fromRGB(0,0,0)
     end)
 end)
 
@@ -1056,5 +965,5 @@ trackConn(workspace.DescendantAdded:Connect(function(obj)
     task.defer(function() pcall(function() nukeWorldObject(obj) end) end)
 end))
 
-print("[NONO v5.0] crowd proof loaded.")
+print("[NONO v5.1] scroll + N button loaded.")
 print("setfpscap:", HAS_SETFPSCAP, "| sethiddenproperty:", HAS_SETHIDDEN)
