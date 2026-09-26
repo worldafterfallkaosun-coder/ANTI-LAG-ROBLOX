@@ -1,8 +1,10 @@
 -- ================================================
--- NONO ANTI-LAG v5.2 | SCROLL + N BUTTON PATCH
+-- NONO ANTI-LAG v5.3 | CAMERA ZOOM BYPASS PATCH
 -- Tambah: ScrollingFrame di body, tombol N bulat
 -- v5.2: Sound & overhead (nametag/healthbar BillboardGui)
 --       TIDAK lagi dimatikan/disenyapkan
+-- v5.3: bypassCameraMaxZoomDistance — zoom tanpa batas
+--       Toggle di UI existing (LayoutOrder 13)
 -- ================================================
 
 local Players          = game:GetService("Players")
@@ -34,13 +36,19 @@ local CFG = {
 }
 
 local state = {
-    texture = true,
-    shadow  = true,
-    leaf    = true,
-    fx      = true,
-    anchor  = true,
-    sky     = false,
+    texture    = true,
+    shadow     = true,
+    leaf       = true,
+    fx         = true,
+    anchor     = true,
+    sky        = false,
+    zoomBypass = false,  -- v5.3: bypass MaxZoomDistance
 }
+
+-- v5.3: Zoom bypass internals
+local ZOOM_BYPASS_LIMIT   = 1000   -- studs, praktis unlimited
+local zoomBypassConn      = nil
+local zoomBypassActive    = false
 
 local applied      = false
 local fpsCapValue  = CFG.fpsTarget
@@ -82,6 +90,87 @@ end
 local function tryHidden(obj, prop, val)
     if HAS_SETHIDDEN then pcall(sethiddenproperty, obj, prop, val) end
 end
+
+-- ================================================
+-- v5.3: CAMERA MAX ZOOM BYPASS
+-- ================================================
+local Camera = workspace.CurrentCamera
+
+local function applyZoomBypass()
+    if zoomBypassActive then return end
+    zoomBypassActive = true
+
+    -- set MaxZoomDistance via sethiddenproperty jika tersedia
+    -- fallback: loop terus paksa lewat Camera.CFrame (non-destructive)
+    pcall(function()
+        local char = lp.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                -- langsung set hidden prop MaxZoomDistance
+                tryHidden(hum, "CameraMaxZoomDistance", ZOOM_BYPASS_LIMIT)
+            end
+        end
+    end)
+
+    -- persistent loop: jaga nilainya tiap kali karakter spawn ulang
+    zoomBypassConn = RunService.Heartbeat:Connect(function()
+        pcall(function()
+            local char = lp.Character
+            if not char then return end
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if not hum then return end
+            -- jika sethiddenproperty tersedia, paksa terus
+            if HAS_SETHIDDEN then
+                pcall(sethiddenproperty, hum, "CameraMaxZoomDistance", ZOOM_BYPASS_LIMIT)
+            else
+                -- fallback: set lewat property biasa (beberapa executor expose ini)
+                if hum.CameraMaxZoomDistance < ZOOM_BYPASS_LIMIT then
+                    hum.CameraMaxZoomDistance = ZOOM_BYPASS_LIMIT
+                end
+            end
+        end)
+    end)
+    trackConn(zoomBypassConn)
+end
+
+local function removeZoomBypass()
+    if not zoomBypassActive then return end
+    zoomBypassActive = false
+    if zoomBypassConn then
+        pcall(function() zoomBypassConn:Disconnect() end)
+        zoomBypassConn = nil
+    end
+    -- restore default 400 studs
+    pcall(function()
+        local char = lp.Character
+        if not char then return end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            if HAS_SETHIDDEN then
+                pcall(sethiddenproperty, hum, "CameraMaxZoomDistance", 400)
+            else
+                hum.CameraMaxZoomDistance = 400
+            end
+        end
+    end)
+end
+
+-- jaga bypass saat respawn
+trackConn(lp.CharacterAdded:Connect(function(char)
+    if not state.zoomBypass then return end
+    task.wait(0.5) -- tunggu humanoid load
+    pcall(function()
+        local hum = char:WaitForChild("Humanoid", 3)
+        if hum then
+            if HAS_SETHIDDEN then
+                pcall(sethiddenproperty, hum, "CameraMaxZoomDistance", ZOOM_BYPASS_LIMIT)
+            else
+                hum.CameraMaxZoomDistance = ZOOM_BYPASS_LIMIT
+            end
+        end
+    end)
+end))
 
 -- ================================================
 -- PLAYER OPTIMIZATION
@@ -733,6 +822,77 @@ makeToggleRow("Kill FX",      "fx",      8)
 makeToggleRow("Anchor Parts", "anchor",  9)
 makeToggleRow("Kill Skybox",  "sky",     10)
 
+-- ================================================
+-- v5.3: ZOOM BYPASS TOGGLE ROW (custom, karena punya side effect)
+-- ================================================
+do
+    local zRow = Instance.new("Frame", body)
+    zRow.Size             = UDim2.new(1,0,0,26)
+    zRow.BackgroundColor3 = Color3.fromRGB(20,20,20)
+    zRow.BorderSizePixel  = 0
+    zRow.LayoutOrder      = 13
+    Instance.new("UICorner", zRow).CornerRadius = UDim.new(0,6)
+
+    -- stroke accent biar keliatan beda (fitur baru)
+    local zStroke = Instance.new("UIStroke", zRow)
+    zStroke.Color     = Color3.fromRGB(80, 60, 200)
+    zStroke.Thickness = 0.6
+
+    local zLbl = Instance.new("TextLabel", zRow)
+    zLbl.Text               = "🔭 Max Zoom Bypass"
+    zLbl.Font               = Enum.Font.Code
+    zLbl.TextSize           = 9
+    zLbl.TextColor3         = Color3.fromRGB(180,160,255)
+    zLbl.BackgroundTransparency = 1
+    zLbl.Size               = UDim2.new(1,-44,1,0)
+    zLbl.Position           = UDim2.new(0,8,0,0)
+    zLbl.TextXAlignment     = Enum.TextXAlignment.Left
+
+    local zPill = Instance.new("Frame", zRow)
+    zPill.Size             = UDim2.new(0,28,0,14)
+    zPill.Position         = UDim2.new(1,-34,0.5,-7)
+    zPill.BackgroundColor3 = Color3.fromRGB(55,55,55) -- OFF by default
+    zPill.BorderSizePixel  = 0
+    Instance.new("UICorner", zPill).CornerRadius = UDim.new(1,0)
+
+    local zThumb = Instance.new("Frame", zPill)
+    zThumb.Size             = UDim2.new(0,10,0,10)
+    zThumb.Position         = UDim2.new(0,2,0.5,-5) -- OFF pos
+    zThumb.BackgroundColor3 = Color3.fromRGB(255,255,255)
+    zThumb.BorderSizePixel  = 0
+    Instance.new("UICorner", zThumb).CornerRadius = UDim.new(1,0)
+
+    local zBtn = Instance.new("TextButton", zRow)
+    zBtn.Size                = UDim2.new(1,0,1,0)
+    zBtn.BackgroundTransparency = 1
+    zBtn.Text                = ""
+    zBtn.ZIndex              = 5
+
+    zBtn.MouseButton1Click:Connect(function()
+        state.zoomBypass = not state.zoomBypass
+
+        local onColor  = Color3.fromRGB(100,80,255)
+        local offColor = Color3.fromRGB(55,55,55)
+
+        TweenService:Create(zPill, TweenInfo.new(0.12), {
+            BackgroundColor3 = state.zoomBypass and onColor or offColor
+        }):Play()
+        TweenService:Create(zThumb, TweenInfo.new(0.12), {
+            Position = state.zoomBypass
+                and UDim2.new(1,-12,0.5,-5)
+                or  UDim2.new(0,2,0.5,-5)
+        }):Play()
+
+        if state.zoomBypass then
+            applyZoomBypass()
+            log("zoom bypass ON (" .. ZOOM_BYPASS_LIMIT .. " studs)")
+        else
+            removeZoomBypass()
+            log("zoom bypass OFF (reset 400)")
+        end
+    end)
+end
+
 -- APPLY BUTTON
 local applyBtn=Instance.new("TextButton",body)
 applyBtn.Text="⚡ APPLY NUKE"; applyBtn.Font=Enum.Font.Code; applyBtn.TextSize=10
@@ -955,5 +1115,5 @@ trackConn(workspace.DescendantAdded:Connect(function(obj)
     task.defer(function() pcall(function() nukeWorldObject(obj) end) end)
 end))
 
-print("[NONO v5.2] scroll + N button loaded. (sound & overhead preserved)")
+print("[NONO v5.3] zoom bypass patch loaded. (sound & overhead preserved)")
 print("setfpscap:", HAS_SETFPSCAP, "| sethiddenproperty:", HAS_SETHIDDEN)
