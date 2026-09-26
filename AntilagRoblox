@@ -1,9 +1,9 @@
 -- ================================================
--- NONO ANTI-LAG v5.3 | CAMERA ZOOM BYPASS PATCH
+-- NONO ANTI-LAG v5.4 | CAMERA ZOOM BYPASS — REAL FIX
 -- Tambah: ScrollingFrame di body, tombol N bulat
 -- v5.2: Sound & overhead (nametag/healthbar BillboardGui)
 --       TIDAK lagi dimatikan/disenyapkan
--- v5.3: bypassCameraMaxZoomDistance — zoom tanpa batas
+-- v5.4: Zoom bypass via scroll intercept + RenderStepped CFrame
 --       Toggle di UI existing (LayoutOrder 13)
 -- ================================================
 
@@ -92,85 +92,128 @@ local function tryHidden(obj, prop, val)
 end
 
 -- ================================================
--- v5.3: CAMERA MAX ZOOM BYPASS
+-- v5.4: CAMERA MAX ZOOM BYPASS — REAL IMPLEMENTATION
+-- Strategy: intercept scroll wheel → manual zoom offset
+-- CameraMaxZoomDistance ga bisa dipaksa dari luar tanpa
+-- sethiddenproperty yg works. Solusi: kita AMBIL ALIH zoom
+-- control sepenuhnya via scroll hook + RenderStepped CFrame lock.
 -- ================================================
 local Camera = workspace.CurrentCamera
+
+-- zoom state
+local zoomCurrent  = 10    -- zoom distance saat ini (studs)
+local ZOOM_MIN     = 0.5
+local ZOOM_MAX     = 1000  -- batas atas "unlimited"
+local ZOOM_STEP    = 2     -- studs per scroll tick
+local zoomConns    = {}    -- koneksi khusus zoom, supaya bisa dicabut
+
+local function disconnectZoomConns()
+    for _, c in ipairs(zoomConns) do
+        pcall(function() c:Disconnect() end)
+    end
+    zoomConns = {}
+end
 
 local function applyZoomBypass()
     if zoomBypassActive then return end
     zoomBypassActive = true
+    disconnectZoomConns()
 
-    -- set MaxZoomDistance via sethiddenproperty jika tersedia
-    -- fallback: loop terus paksa lewat Camera.CFrame (non-destructive)
+    -- Step 1: set CameraMaxZoomDistance via semua metode yang ada
+    local function forceHumZoom(char)
+        if not char then return end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum then return end
+        -- coba sethiddenproperty
+        pcall(function() sethiddenproperty(hum, "CameraMaxZoomDistance", ZOOM_MAX) end)
+        -- coba property langsung (kalau executor expose ini)
+        pcall(function() hum.CameraMaxZoomDistance = ZOOM_MAX end)
+    end
+
+    -- paksa sekarang
+    forceHumZoom(lp.Character)
+
+    -- Step 2: intercept scroll wheel → kontrol zoom manual
+    -- ini yang BENERAN bypass karena kita gantiin behavior scroll
+    local scrollConn = UserInputService.InputChanged:Connect(function(input, gpe)
+        if not state.zoomBypass then return end
+        if gpe then return end  -- game processed event → skip
+        if input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
+
+        local delta = input.Position.Z  -- +1 scroll out, -1 scroll in
+        zoomCurrent = math.clamp(zoomCurrent - delta * ZOOM_STEP, ZOOM_MIN, ZOOM_MAX)
+    end)
+    table.insert(zoomConns, scrollConn)
+    trackConn(scrollConn)
+
+    -- Step 3: RenderStepped — paksa CFrame offset sesuai zoomCurrent
+    -- hanya aktif kalau CameraType = Custom (default third person)
+    local renderConn = RunService.RenderStepped:Connect(function()
+        if not state.zoomBypass then return end
+        pcall(function()
+            local cam  = workspace.CurrentCamera
+            local char = lp.Character
+            if not char then return end
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if not root then return end
+
+            -- hanya intercept kalau camera mode Custom / Follow
+            if cam.CameraType ~= Enum.CameraType.Custom
+            and cam.CameraType ~= Enum.CameraType.Follow then return end
+
+            local rootCF   = root.CFrame
+            local camCF    = cam.CFrame
+            local lookDir  = (camCF.Position - rootCF.Position)
+
+            -- kalau distance udah sama → skip (no-op)
+            local curDist = lookDir.Magnitude
+            if math.abs(curDist - zoomCurrent) < 0.05 then return end
+
+            -- reposisi camera di jarak zoomCurrent, arah sama
+            local dir     = lookDir.Unit
+            local newPos  = rootCF.Position + dir * zoomCurrent
+            -- pertahankan look direction
+            cam.CFrame    = CFrame.new(newPos, rootCF.Position)
+        end)
+    end)
+    table.insert(zoomConns, renderConn)
+    trackConn(renderConn)
+
+    -- Step 4: update zoomCurrent ke distance kamera sekarang saat pertama aktif
     pcall(function()
         local char = lp.Character
-        if char then
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum then
-                -- langsung set hidden prop MaxZoomDistance
-                tryHidden(hum, "CameraMaxZoomDistance", ZOOM_BYPASS_LIMIT)
-            end
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        local cam  = workspace.CurrentCamera
+        if root and cam then
+            local dist = (cam.CFrame.Position - root.Position).Magnitude
+            zoomCurrent = math.clamp(dist, ZOOM_MIN, ZOOM_MAX)
         end
     end)
 
-    -- persistent loop: jaga nilainya tiap kali karakter spawn ulang
-    zoomBypassConn = RunService.Heartbeat:Connect(function()
-        pcall(function()
-            local char = lp.Character
-            if not char then return end
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if not hum then return end
-            -- jika sethiddenproperty tersedia, paksa terus
-            if HAS_SETHIDDEN then
-                pcall(sethiddenproperty, hum, "CameraMaxZoomDistance", ZOOM_BYPASS_LIMIT)
-            else
-                -- fallback: set lewat property biasa (beberapa executor expose ini)
-                if hum.CameraMaxZoomDistance < ZOOM_BYPASS_LIMIT then
-                    hum.CameraMaxZoomDistance = ZOOM_BYPASS_LIMIT
-                end
-            end
-        end)
+    -- Step 5: respawn handler
+    local respawnConn = lp.CharacterAdded:Connect(function(char)
+        if not state.zoomBypass then return end
+        task.wait(0.3)
+        forceHumZoom(char)
+        zoomCurrent = 10  -- reset ke default saat respawn
     end)
-    trackConn(zoomBypassConn)
+    table.insert(zoomConns, respawnConn)
+    trackConn(respawnConn)
 end
 
 local function removeZoomBypass()
     if not zoomBypassActive then return end
     zoomBypassActive = false
-    if zoomBypassConn then
-        pcall(function() zoomBypassConn:Disconnect() end)
-        zoomBypassConn = nil
-    end
-    -- restore default 400 studs
+    disconnectZoomConns()
+    -- restore MaxZoomDistance ke default 400
     pcall(function()
-        local char = lp.Character
-        if not char then return end
-        local hum = char:FindFirstChildOfClass("Humanoid")
+        local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
         if hum then
-            if HAS_SETHIDDEN then
-                pcall(sethiddenproperty, hum, "CameraMaxZoomDistance", 400)
-            else
-                hum.CameraMaxZoomDistance = 400
-            end
+            pcall(function() sethiddenproperty(hum, "CameraMaxZoomDistance", 400) end)
+            pcall(function() hum.CameraMaxZoomDistance = 400 end)
         end
     end)
 end
-
--- jaga bypass saat respawn
-trackConn(lp.CharacterAdded:Connect(function(char)
-    if not state.zoomBypass then return end
-    task.wait(0.5) -- tunggu humanoid load
-    pcall(function()
-        local hum = char:WaitForChild("Humanoid", 3)
-        if hum then
-            if HAS_SETHIDDEN then
-                pcall(sethiddenproperty, hum, "CameraMaxZoomDistance", ZOOM_BYPASS_LIMIT)
-            else
-                hum.CameraMaxZoomDistance = ZOOM_BYPASS_LIMIT
-            end
-        end
-    end)
-end))
 
 -- ================================================
 -- PLAYER OPTIMIZATION
@@ -839,7 +882,7 @@ do
     zStroke.Thickness = 0.6
 
     local zLbl = Instance.new("TextLabel", zRow)
-    zLbl.Text               = "🔭 Max Zoom Bypass"
+    zLbl.Text               = "Zoom Bypass"
     zLbl.Font               = Enum.Font.Code
     zLbl.TextSize           = 9
     zLbl.TextColor3         = Color3.fromRGB(180,160,255)
@@ -1115,5 +1158,5 @@ trackConn(workspace.DescendantAdded:Connect(function(obj)
     task.defer(function() pcall(function() nukeWorldObject(obj) end) end)
 end))
 
-print("[NONO v5.3] zoom bypass patch loaded. (sound & overhead preserved)")
+print("[NONO v5.4] zoom bypass real fix loaded. scroll intercept + RenderStepped active")
 print("setfpscap:", HAS_SETFPSCAP, "| sethiddenproperty:", HAS_SETHIDDEN)
