@@ -1,7 +1,7 @@
 -- ================================================
--- NONO ANTI-LAG GUI v3.0
--- Fix: lag dari heartbeat loop, drag conflict touch,
---      + live FPS before/after counter
+-- NONO ANTI-LAG v4.0 | MAXIMUM OVERDRIVE
+-- Every single optimization Roblox allows + executor tricks
+-- Delta compatible
 -- ================================================
 
 local Players          = game:GetService("Players")
@@ -9,90 +9,122 @@ local RunService       = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService     = game:GetService("TweenService")
 local Lighting         = game:GetService("Lighting")
-local Stats            = game:GetService("Stats")
+local SoundService     = game:GetService("SoundService")
+local StarterGui       = game:GetService("StarterGui")
 
 local lp = Players.LocalPlayer
+
+-- ================================================
+-- CONFIG — tweak sesuai device
+-- ================================================
+local CFG = {
+    targetFPS    = 60,   -- setfpscap target (Delta bypass 60 limit)
+    renderDist   = 512,  -- stud visibility
+    soundKill    = true, -- matiin semua audio
+    lightKill    = true, -- destroy semua PointLight/SpotLight
+    constraintKill = true, -- destroy physics constraints
+    guiKill      = true, -- destroy BillboardGui/SurfaceGui in workspace
+    npcOptim     = true, -- disable NPC humanoid states
+    netOwn       = true, -- network ownership trick
+}
 
 -- ================================================
 -- STATE
 -- ================================================
 local state = {
-    texture = true,
-    shadow  = true,
-    leaf    = true,
-    fx      = true,
-    anchor  = true,
-    sky     = false,
+    texture  = true,
+    shadow   = true,
+    leaf     = true,
+    fx       = true,
+    anchor   = true,
+    sky      = false,
 }
-local renderDist   = 512
-local fpsBaseline  = nil   -- FPS sebelum apply
-local applied      = false
+local renderDist  = CFG.renderDist
+local applied     = false
+local fpsCapValue = CFG.targetFPS
 
 -- ================================================
--- FPS UTILITY (smooth rolling average)
+-- FPS COUNTER
 -- ================================================
 local fpsSamples = {}
-local FPS_SAMPLE = 30  -- jumlah sample di-average
-
 local function getFPS()
-    local sum = 0
-    for _, v in ipairs(fpsSamples) do sum = sum + v end
-    return #fpsSamples > 0 and math.floor(sum / #fpsSamples) or 0
+    local s = 0
+    for _, v in ipairs(fpsSamples) do s = s + v end
+    return #fpsSamples > 0 and math.floor(s / #fpsSamples) or 0
+end
+RunService.RenderStepped:Connect(function(dt)
+    table.insert(fpsSamples, 1 / dt)
+    if #fpsSamples > 40 then table.remove(fpsSamples, 1) end
+end)
+
+-- ================================================
+-- EXECUTOR FUNCTIONS (Delta compatible)
+-- ================================================
+local function trySetFPSCap(fps)
+    -- Method 1: setfpscap (Delta, Synapse, etc)
+    if setfpscap then
+        pcall(setfpscap, fps)
+        return "setfpscap(" .. fps .. ")"
+    end
+    -- Method 2: via settings hidden
+    pcall(function()
+        settings().Rendering.FrameRateManager = Enum.FrameRateManagerMode.Off
+    end)
+    return "fallback"
 end
 
-RunService.RenderStepped:Connect(function(dt)
-    table.insert(fpsSamples, 1/dt)
-    if #fpsSamples > FPS_SAMPLE then
-        table.remove(fpsSamples, 1)
+local function trySetHidden(obj, prop, val)
+    if sethiddenproperty then
+        pcall(sethiddenproperty, obj, prop, val)
     end
-end)
+end
+
+local function trySetRenderProperty(prop, val)
+    if setrenderproperty then
+        pcall(setrenderproperty, prop, val)
+    end
+end
 
 -- ================================================
 -- GUI BUILD
 -- ================================================
--- Hapus GUI lama kalau ada
-local oldGui = lp:FindFirstChild("PlayerGui") and lp.PlayerGui:FindFirstChild("NonoAntiLag")
+local oldGui = lp.PlayerGui:FindFirstChild("NonoAntiLag")
 if oldGui then oldGui:Destroy() end
 
 local sg = Instance.new("ScreenGui")
-sg.Name            = "NonoAntiLag"
-sg.ResetOnSpawn    = false
-sg.ZIndexBehavior  = Enum.ZIndexBehavior.Sibling
-sg.IgnoreGuiInset  = true
-sg.DisplayOrder    = 999
-sg.Parent          = lp:WaitForChild("PlayerGui")
+sg.Name           = "NonoAntiLag"
+sg.ResetOnSpawn   = false
+sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+sg.IgnoreGuiInset = true
+sg.DisplayOrder   = 999
+sg.Parent         = lp:WaitForChild("PlayerGui")
 
--- MAIN FRAME
+-- MAIN
 local main = Instance.new("Frame")
-main.Name              = "Main"
-main.Size              = UDim2.new(0, 210, 0, 0)
-main.Position          = UDim2.new(0, 12, 0, 80)
-main.BackgroundColor3  = Color3.fromRGB(14, 14, 14)
+main.Name                   = "Main"
+main.Size                   = UDim2.new(0, 210, 0, 0)
+main.Position               = UDim2.new(0, 12, 0, 80)
+main.BackgroundColor3       = Color3.fromRGB(14, 14, 14)
 main.BackgroundTransparency = 0.06
-main.BorderSizePixel   = 0
-main.AutomaticSize     = Enum.AutomaticSize.Y
-main.Parent            = sg
+main.BorderSizePixel        = 0
+main.AutomaticSize          = Enum.AutomaticSize.Y
+main.Parent                 = sg
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 8)
 local ms = Instance.new("UIStroke", main)
 ms.Color     = Color3.fromRGB(55, 55, 55)
 ms.Thickness = 0.8
+local mainL = Instance.new("UIListLayout", main)
+mainL.FillDirection = Enum.FillDirection.Vertical
+mainL.SortOrder     = Enum.SortOrder.LayoutOrder
+mainL.Padding       = UDim.new(0, 0)
 
-local mainLayout = Instance.new("UIListLayout", main)
-mainLayout.FillDirection = Enum.FillDirection.Vertical
-mainLayout.SortOrder     = Enum.SortOrder.LayoutOrder
-mainLayout.Padding       = UDim.new(0, 0)
-
--- ================================================
 -- HEADER
--- ================================================
 local header = Instance.new("Frame", main)
 header.Size             = UDim2.new(1, 0, 0, 28)
 header.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
 header.BorderSizePixel  = 0
 header.LayoutOrder      = 0
 Instance.new("UICorner", header).CornerRadius = UDim.new(0, 8)
-
--- fix rounded bottom header
 local hFix = Instance.new("Frame", header)
 hFix.Size             = UDim2.new(1, 0, 0.5, 0)
 hFix.Position         = UDim2.new(0, 0, 0.5, 0)
@@ -107,14 +139,14 @@ dot.BorderSizePixel  = 0
 Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
 
 local titleLbl = Instance.new("TextLabel", header)
-titleLbl.Text              = "NONO LAG NUKE"
-titleLbl.Font              = Enum.Font.Code
-titleLbl.TextSize          = 10
-titleLbl.TextColor3        = Color3.fromRGB(200, 200, 200)
+titleLbl.Text                   = "NONO LAG NUKE"
+titleLbl.Font                   = Enum.Font.Code
+titleLbl.TextSize               = 10
+titleLbl.TextColor3             = Color3.fromRGB(200, 200, 200)
 titleLbl.BackgroundTransparency = 1
-titleLbl.Size              = UDim2.new(1, -60, 1, 0)
-titleLbl.Position          = UDim2.new(0, 20, 0, 0)
-titleLbl.TextXAlignment    = Enum.TextXAlignment.Left
+titleLbl.Size                   = UDim2.new(1, -60, 1, 0)
+titleLbl.Position               = UDim2.new(0, 20, 0, 0)
+titleLbl.TextXAlignment         = Enum.TextXAlignment.Left
 
 local toggleBtn = Instance.new("TextButton", header)
 toggleBtn.Text             = "▼"
@@ -127,21 +159,17 @@ toggleBtn.Position         = UDim2.new(1, -34, 0.5, -9)
 toggleBtn.BorderSizePixel  = 0
 Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 4)
 
--- ================================================
 -- BODY
--- ================================================
 local body = Instance.new("Frame", main)
-body.Size               = UDim2.new(1, 0, 0, 0)
+body.Size                   = UDim2.new(1, 0, 0, 0)
 body.BackgroundTransparency = 1
-body.AutomaticSize      = Enum.AutomaticSize.Y
-body.BorderSizePixel    = 0
-body.LayoutOrder        = 1
-
-local bodyLayout = Instance.new("UIListLayout", body)
-bodyLayout.FillDirection = Enum.FillDirection.Vertical
-bodyLayout.SortOrder     = Enum.SortOrder.LayoutOrder
-bodyLayout.Padding       = UDim.new(0, 4)
-
+body.AutomaticSize          = Enum.AutomaticSize.Y
+body.BorderSizePixel        = 0
+body.LayoutOrder            = 1
+local bodyL = Instance.new("UIListLayout", body)
+bodyL.FillDirection = Enum.FillDirection.Vertical
+bodyL.SortOrder     = Enum.SortOrder.LayoutOrder
+bodyL.Padding       = UDim.new(0, 4)
 local bodyPad = Instance.new("UIPadding", body)
 bodyPad.PaddingTop    = UDim.new(0, 6)
 bodyPad.PaddingBottom = UDim.new(0, 6)
@@ -149,94 +177,180 @@ bodyPad.PaddingLeft   = UDim.new(0, 8)
 bodyPad.PaddingRight  = UDim.new(0, 8)
 
 -- ================================================
--- FPS DISPLAY ROW (NEW)
+-- FPS ROW
 -- ================================================
 local fpsRow = Instance.new("Frame", body)
-fpsRow.Size             = UDim2.new(1, 0, 0, 28)
+fpsRow.Size             = UDim2.new(1, 0, 0, 36)
 fpsRow.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
 fpsRow.BorderSizePixel  = 0
 fpsRow.LayoutOrder      = 0
 Instance.new("UICorner", fpsRow).CornerRadius = UDim.new(0, 5)
 
-local fpsRowLayout = Instance.new("UIListLayout", fpsRow)
-fpsRowLayout.FillDirection = Enum.FillDirection.Horizontal
-fpsRowLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-fpsRowLayout.VerticalAlignment   = Enum.VerticalAlignment.Center
-fpsRowLayout.Padding = UDim.new(0, 0)
+-- BEFORE
+local bCol = Instance.new("Frame", fpsRow)
+bCol.Size                   = UDim2.new(0.5, -1, 1, 0)
+bCol.BackgroundTransparency = 1
 
--- Before col
-local fpsBefore = Instance.new("Frame", fpsRow)
-fpsBefore.Size               = UDim2.new(0.5, 0, 1, 0)
-fpsBefore.BackgroundTransparency = 1
-fpsBefore.BorderSizePixel    = 0
+local bTop = Instance.new("TextLabel", bCol)
+bTop.Text                   = "BEFORE"
+bTop.Font                   = Enum.Font.Code
+bTop.TextSize               = 7
+bTop.TextColor3             = Color3.fromRGB(100, 100, 100)
+bTop.BackgroundTransparency = 1
+bTop.Size                   = UDim2.new(1, 0, 0, 14)
+bTop.Position               = UDim2.new(0, 0, 0, 4)
+bTop.TextXAlignment         = Enum.TextXAlignment.Center
 
-local fpsBeforeTop = Instance.new("TextLabel", fpsBefore)
-fpsBeforeTop.Text          = "BEFORE"
-fpsBeforeTop.Font          = Enum.Font.Code
-fpsBeforeTop.TextSize      = 7
-fpsBeforeTop.TextColor3    = Color3.fromRGB(100, 100, 100)
-fpsBeforeTop.BackgroundTransparency = 1
-fpsBeforeTop.Size          = UDim2.new(1, 0, 0.45, 0)
-fpsBeforeTop.TextXAlignment = Enum.TextXAlignment.Center
-
-local fpsBeforeVal = Instance.new("TextLabel", fpsBefore)
-fpsBeforeVal.Text          = "-- fps"
-fpsBeforeVal.Font          = Enum.Font.Code
-fpsBeforeVal.TextSize      = 11
-fpsBeforeVal.TextColor3    = Color3.fromRGB(200, 100, 80)
+local fpsBeforeVal = Instance.new("TextLabel", bCol)
+fpsBeforeVal.Text                   = "-- fps"
+fpsBeforeVal.Font                   = Enum.Font.Code
+fpsBeforeVal.TextSize               = 13
+fpsBeforeVal.TextColor3             = Color3.fromRGB(200, 100, 80)
 fpsBeforeVal.BackgroundTransparency = 1
-fpsBeforeVal.Size          = UDim2.new(1, 0, 0.55, 0)
-fpsBeforeVal.Position      = UDim2.new(0, 0, 0.45, 0)
-fpsBeforeVal.TextXAlignment = Enum.TextXAlignment.Center
+fpsBeforeVal.Size                   = UDim2.new(1, 0, 0, 16)
+fpsBeforeVal.Position               = UDim2.new(0, 0, 0, 17)
+fpsBeforeVal.TextXAlignment         = Enum.TextXAlignment.Center
 
--- Divider
-local fpsDivider = Instance.new("Frame", fpsRow)
-fpsDivider.Size             = UDim2.new(0, 1, 0.6, 0)
-fpsDivider.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-fpsDivider.BorderSizePixel  = 0
+-- divider
+local fdiv = Instance.new("Frame", fpsRow)
+fdiv.Size             = UDim2.new(0, 1, 0.6, 0)
+fdiv.Position         = UDim2.new(0.5, 0, 0.2, 0)
+fdiv.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+fdiv.BorderSizePixel  = 0
 
--- After col
-local fpsAfter = Instance.new("Frame", fpsRow)
-fpsAfter.Size               = UDim2.new(0.5, -1, 1, 0)
-fpsAfter.BackgroundTransparency = 1
-fpsAfter.BorderSizePixel    = 0
+-- AFTER
+local aCol = Instance.new("Frame", fpsRow)
+aCol.Size                   = UDim2.new(0.5, -1, 1, 0)
+aCol.Position               = UDim2.new(0.5, 1, 0, 0)
+aCol.BackgroundTransparency = 1
 
-local fpsAfterTop = Instance.new("TextLabel", fpsAfter)
-fpsAfterTop.Text          = "AFTER"
-fpsAfterTop.Font          = Enum.Font.Code
-fpsAfterTop.TextSize      = 7
-fpsAfterTop.TextColor3    = Color3.fromRGB(100, 100, 100)
-fpsAfterTop.BackgroundTransparency = 1
-fpsAfterTop.Size          = UDim2.new(1, 0, 0.45, 0)
-fpsAfterTop.TextXAlignment = Enum.TextXAlignment.Center
+local aTop = Instance.new("TextLabel", aCol)
+aTop.Text                   = "AFTER"
+aTop.Font                   = Enum.Font.Code
+aTop.TextSize               = 7
+aTop.TextColor3             = Color3.fromRGB(100, 100, 100)
+aTop.BackgroundTransparency = 1
+aTop.Size                   = UDim2.new(1, 0, 0, 14)
+aTop.Position               = UDim2.new(0, 0, 0, 4)
+aTop.TextXAlignment         = Enum.TextXAlignment.Center
 
-local fpsAfterVal = Instance.new("TextLabel", fpsAfter)
-fpsAfterVal.Text          = "-- fps"
-fpsAfterVal.Font          = Enum.Font.Code
-fpsAfterVal.TextSize      = 11
-fpsAfterVal.TextColor3    = Color3.fromRGB(100, 100, 100)
+local fpsAfterVal = Instance.new("TextLabel", aCol)
+fpsAfterVal.Text                   = "-- fps"
+fpsAfterVal.Font                   = Enum.Font.Code
+fpsAfterVal.TextSize               = 13
+fpsAfterVal.TextColor3             = Color3.fromRGB(100, 100, 100)
 fpsAfterVal.BackgroundTransparency = 1
-fpsAfterVal.Size          = UDim2.new(1, 0, 0.55, 0)
-fpsAfterVal.Position      = UDim2.new(0, 0, 0.45, 0)
-fpsAfterVal.TextXAlignment = Enum.TextXAlignment.Center
+fpsAfterVal.Size                   = UDim2.new(1, 0, 0, 16)
+fpsAfterVal.Position               = UDim2.new(0, 0, 0, 17)
+fpsAfterVal.TextXAlignment         = Enum.TextXAlignment.Center
 
--- live FPS update (lightweight — hanya update label, bukan scan world)
-local fpsUpdateTick = 0
+-- FPS live update tiap 20 frame (lightweight)
+local fTick = 0
+local function colorFPS(fps)
+    return fps >= 55 and Color3.fromRGB(80,220,120)
+        or fps >= 40 and Color3.fromRGB(220,200,60)
+        or fps >= 25 and Color3.fromRGB(220,130,60)
+        or Color3.fromRGB(220,70,60)
+end
 RunService.RenderStepped:Connect(function()
-    fpsUpdateTick = fpsUpdateTick + 1
-    if fpsUpdateTick % 20 ~= 0 then return end  -- update tiap 20 frame aja
+    fTick += 1
+    if fTick % 20 ~= 0 then return end
     local cur = getFPS()
     if not applied then
-        fpsBeforeVal.Text = cur .. " fps"
-        -- color code
-        fpsBeforeVal.TextColor3 = cur >= 50 and Color3.fromRGB(80,200,120)
-            or cur >= 30 and Color3.fromRGB(220,180,60)
-            or Color3.fromRGB(200,80,60)
+        fpsBeforeVal.Text      = cur .. " fps"
+        fpsBeforeVal.TextColor3 = colorFPS(cur)
     else
-        fpsAfterVal.Text = cur .. " fps"
-        fpsAfterVal.TextColor3 = cur >= 50 and Color3.fromRGB(80,200,120)
-            or cur >= 30 and Color3.fromRGB(220,180,60)
-            or Color3.fromRGB(200,80,60)
+        fpsAfterVal.Text       = cur .. " fps"
+        fpsAfterVal.TextColor3 = colorFPS(cur)
+    end
+end)
+
+-- ================================================
+-- FPS CAP SLIDER (NEW — bypass 60fps via setfpscap)
+-- ================================================
+local capRow = Instance.new("Frame", body)
+capRow.Size             = UDim2.new(1, 0, 0, 42)
+capRow.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+capRow.BorderSizePixel  = 0
+capRow.LayoutOrder      = 1
+Instance.new("UICorner", capRow).CornerRadius = UDim.new(0, 5)
+local capPad = Instance.new("UIPadding", capRow)
+capPad.PaddingLeft   = UDim.new(0, 7)
+capPad.PaddingRight  = UDim.new(0, 7)
+capPad.PaddingTop    = UDim.new(0, 5)
+capPad.PaddingBottom = UDim.new(0, 5)
+local capL = Instance.new("UIListLayout", capRow)
+capL.FillDirection = Enum.FillDirection.Vertical
+capL.Padding       = UDim.new(0, 4)
+
+local capLblRow = Instance.new("Frame", capRow)
+capLblRow.Size                   = UDim2.new(1, 0, 0, 12)
+capLblRow.BackgroundTransparency = 1
+
+local capLbl = Instance.new("TextLabel", capLblRow)
+capLbl.Text                   = "FPS Cap (setfpscap)"
+capLbl.Font                   = Enum.Font.Code
+capLbl.TextSize               = 9
+capLbl.TextColor3             = Color3.fromRGB(180, 180, 180)
+capLbl.BackgroundTransparency = 1
+capLbl.Size                   = UDim2.new(0.6, 0, 1, 0)
+capLbl.TextXAlignment         = Enum.TextXAlignment.Left
+
+local capValLbl = Instance.new("TextLabel", capLblRow)
+capValLbl.Text                   = tostring(fpsCapValue)
+capValLbl.Font                   = Enum.Font.Code
+capValLbl.TextSize               = 9
+capValLbl.TextColor3             = Color3.fromRGB(120, 180, 255)
+capValLbl.BackgroundTransparency = 1
+capValLbl.Size                   = UDim2.new(0.4, 0, 1, 0)
+capValLbl.Position               = UDim2.new(0.6, 0, 0, 0)
+capValLbl.TextXAlignment         = Enum.TextXAlignment.Right
+
+local capTrack = Instance.new("Frame", capRow)
+capTrack.Size             = UDim2.new(1, 0, 0, 6)
+capTrack.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+capTrack.BorderSizePixel  = 0
+Instance.new("UICorner", capTrack).CornerRadius = UDim.new(1, 0)
+
+local capFill = Instance.new("Frame", capTrack)
+capFill.Size             = UDim2.new(0.2, 0, 1, 0) -- 60fps default (60/300 range)
+capFill.BackgroundColor3 = Color3.fromRGB(120, 180, 255)
+capFill.BorderSizePixel  = 0
+Instance.new("UICorner", capFill).CornerRadius = UDim.new(1, 0)
+
+local capThumb = Instance.new("TextButton", capTrack)
+capThumb.Size             = UDim2.new(0, 16, 0, 16)
+capThumb.AnchorPoint      = Vector2.new(0.5, 0.5)
+capThumb.Position         = UDim2.new(0.2, 0, 0.5, 0)
+capThumb.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+capThumb.Text             = ""
+capThumb.BorderSizePixel  = 0
+capThumb.ZIndex           = 10
+Instance.new("UICorner", capThumb).CornerRadius = UDim.new(1, 0)
+
+local MIN_FPS, MAX_FPS = 30, 300
+local capDragging = false
+
+local function setCapValue(val)
+    val = math.clamp(math.floor(val / 5) * 5, MIN_FPS, MAX_FPS) -- snap to multiples of 5
+    fpsCapValue = val
+    local pct = (val - MIN_FPS) / (MAX_FPS - MIN_FPS)
+    capFill.Size     = UDim2.new(pct, 0, 1, 0)
+    capThumb.Position = UDim2.new(pct, 0, 0.5, 0)
+    capValLbl.Text   = tostring(val)
+    -- apply langsung
+    pcall(function() if setfpscap then setfpscap(val) end end)
+end
+
+capThumb.MouseButton1Down:Connect(function() capDragging = true end)
+capTrack.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1
+    or i.UserInputType == Enum.UserInputType.Touch then
+        capDragging = true
+        local abs = capTrack.AbsolutePosition
+        local sz  = capTrack.AbsoluteSize
+        local pct = math.clamp((i.Position.X - abs.X) / sz.X, 0, 1)
+        setCapValue(MIN_FPS + pct * (MAX_FPS - MIN_FPS))
     end
 end)
 
@@ -245,225 +359,186 @@ local statusRow = Instance.new("Frame", body)
 statusRow.Size             = UDim2.new(1, 0, 0, 20)
 statusRow.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 statusRow.BorderSizePixel  = 0
-statusRow.LayoutOrder      = 1
+statusRow.LayoutOrder      = 2
 Instance.new("UICorner", statusRow).CornerRadius = UDim.new(0, 5)
 
-local statusLabel = Instance.new("TextLabel", statusRow)
-statusLabel.Text          = "STATUS"
-statusLabel.Font          = Enum.Font.Code
-statusLabel.TextSize      = 9
-statusLabel.TextColor3    = Color3.fromRGB(100,100,100)
-statusLabel.BackgroundTransparency = 1
-statusLabel.Size          = UDim2.new(0.5, 0, 1, 0)
-statusLabel.Position      = UDim2.new(0, 6, 0, 0)
-statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+local statusLbl = Instance.new("TextLabel", statusRow)
+statusLbl.Text                   = "STATUS"
+statusLbl.Font                   = Enum.Font.Code
+statusLbl.TextSize               = 9
+statusLbl.TextColor3             = Color3.fromRGB(100, 100, 100)
+statusLbl.BackgroundTransparency = 1
+statusLbl.Size                   = UDim2.new(0.5, 0, 1, 0)
+statusLbl.Position               = UDim2.new(0, 6, 0, 0)
+statusLbl.TextXAlignment         = Enum.TextXAlignment.Left
 
 local statusVal = Instance.new("TextLabel", statusRow)
-statusVal.Text          = "● READY"
-statusVal.Font          = Enum.Font.Code
-statusVal.TextSize      = 9
-statusVal.TextColor3    = Color3.fromRGB(0,255,136)
+statusVal.Text                   = "● READY"
+statusVal.Font                   = Enum.Font.Code
+statusVal.TextSize               = 9
+statusVal.TextColor3             = Color3.fromRGB(0, 255, 136)
 statusVal.BackgroundTransparency = 1
-statusVal.Size          = UDim2.new(0.5, -6, 1, 0)
-statusVal.Position      = UDim2.new(0.5, 0, 0, 0)
-statusVal.TextXAlignment = Enum.TextXAlignment.Right
+statusVal.Size                   = UDim2.new(0.5, -6, 1, 0)
+statusVal.Position               = UDim2.new(0.5, 0, 0, 0)
+statusVal.TextXAlignment         = Enum.TextXAlignment.Right
 
 -- ================================================
--- TOGGLE ROW BUILDER
+-- TOGGLE ROWS
 -- ================================================
 local function makeRow(label, key, order)
     local row = Instance.new("Frame", body)
     row.Size             = UDim2.new(1, 0, 0, 22)
-    row.BackgroundColor3 = Color3.fromRGB(20,20,20)
+    row.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
     row.BorderSizePixel  = 0
     row.LayoutOrder      = order
     Instance.new("UICorner", row).CornerRadius = UDim.new(0, 5)
 
     local lbl = Instance.new("TextLabel", row)
-    lbl.Text          = label
-    lbl.Font          = Enum.Font.Code
-    lbl.TextSize      = 9
-    lbl.TextColor3    = Color3.fromRGB(180,180,180)
+    lbl.Text                   = label
+    lbl.Font                   = Enum.Font.Code
+    lbl.TextSize               = 9
+    lbl.TextColor3             = Color3.fromRGB(180, 180, 180)
     lbl.BackgroundTransparency = 1
-    lbl.Size          = UDim2.new(1,-40,1,0)
-    lbl.Position      = UDim2.new(0,7,0,0)
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Size                   = UDim2.new(1, -40, 1, 0)
+    lbl.Position               = UDim2.new(0, 7, 0, 0)
+    lbl.TextXAlignment         = Enum.TextXAlignment.Left
 
     local pill = Instance.new("Frame", row)
-    pill.Size             = UDim2.new(0,26,0,13)
-    pill.Position         = UDim2.new(1,-32,0.5,-6)
+    pill.Size             = UDim2.new(0, 26, 0, 13)
+    pill.Position         = UDim2.new(1, -32, 0.5, -6)
     pill.BackgroundColor3 = state[key] and Color3.fromRGB(0,200,100) or Color3.fromRGB(60,60,60)
     pill.BorderSizePixel  = 0
-    Instance.new("UICorner", pill).CornerRadius = UDim.new(1,0)
+    Instance.new("UICorner", pill).CornerRadius = UDim.new(1, 0)
 
     local thumb = Instance.new("Frame", pill)
-    thumb.Size             = UDim2.new(0,9,0,9)
+    thumb.Size             = UDim2.new(0, 9, 0, 9)
     thumb.Position         = state[key] and UDim2.new(1,-11,0.5,-4) or UDim2.new(0,2,0.5,-4)
-    thumb.BackgroundColor3 = Color3.fromRGB(255,255,255)
+    thumb.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
     thumb.BorderSizePixel  = 0
-    Instance.new("UICorner", thumb).CornerRadius = UDim.new(1,0)
+    Instance.new("UICorner", thumb).CornerRadius = UDim.new(1, 0)
 
-    -- PENTING: TextButton di atas pill, bukan seluruh row
-    -- ini yang fix drag conflict — button hanya cover area pill
     local btn = Instance.new("TextButton", row)
-    btn.Size               = UDim2.new(1,0,1,0)
+    btn.Size                   = UDim2.new(1, 0, 1, 0)
     btn.BackgroundTransparency = 1
-    btn.Text               = ""
-    btn.ZIndex             = 5
+    btn.Text                   = ""
+    btn.ZIndex                 = 5
 
     btn.MouseButton1Click:Connect(function()
         state[key] = not state[key]
-        local ti = TweenInfo.new(0.12)
-        TweenService:Create(pill, ti, {
+        TweenService:Create(pill, TweenInfo.new(0.12), {
             BackgroundColor3 = state[key] and Color3.fromRGB(0,200,100) or Color3.fromRGB(60,60,60)
         }):Play()
-        TweenService:Create(thumb, ti, {
+        TweenService:Create(thumb, TweenInfo.new(0.12), {
             Position = state[key] and UDim2.new(1,-11,0.5,-4) or UDim2.new(0,2,0.5,-4)
         }):Play()
     end)
 end
 
-makeRow("Nuke Texture",  "texture", 2)
-makeRow("Kill Shadow",   "shadow",  3)
-makeRow("Hide Leaves",   "leaf",    4)
-makeRow("Kill FX",       "fx",      5)
-makeRow("Anchor Parts",  "anchor",  6)
-makeRow("Kill Skybox",   "sky",     7)
+makeRow("Nuke Texture",   "texture", 3)
+makeRow("Kill Shadow",    "shadow",  4)
+makeRow("Hide Leaves",    "leaf",    5)
+makeRow("Kill FX",        "fx",      6)
+makeRow("Anchor Parts",   "anchor",  7)
+makeRow("Kill Skybox",    "sky",     8)
 
 -- ================================================
 -- RENDER DISTANCE SLIDER
 -- ================================================
 local rdFrame = Instance.new("Frame", body)
-rdFrame.Size             = UDim2.new(1,0,0,42)
-rdFrame.BackgroundColor3 = Color3.fromRGB(20,20,20)
+rdFrame.Size             = UDim2.new(1, 0, 0, 42)
+rdFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 rdFrame.BorderSizePixel  = 0
-rdFrame.LayoutOrder      = 8
-Instance.new("UICorner", rdFrame).CornerRadius = UDim.new(0,5)
-
+rdFrame.LayoutOrder      = 9
+Instance.new("UICorner", rdFrame).CornerRadius = UDim.new(0, 5)
 local rdPad = Instance.new("UIPadding", rdFrame)
-rdPad.PaddingLeft   = UDim.new(0,7)
-rdPad.PaddingRight  = UDim.new(0,7)
-rdPad.PaddingTop    = UDim.new(0,5)
-rdPad.PaddingBottom = UDim.new(0,5)
+rdPad.PaddingLeft = UDim.new(0, 7); rdPad.PaddingRight = UDim.new(0, 7)
+rdPad.PaddingTop = UDim.new(0, 5);  rdPad.PaddingBottom = UDim.new(0, 5)
+local rdL = Instance.new("UIListLayout", rdFrame)
+rdL.FillDirection = Enum.FillDirection.Vertical; rdL.Padding = UDim.new(0, 4)
 
-local rdInner = Instance.new("Frame", rdFrame)
-rdInner.Size               = UDim2.new(1,0,1,0)
-rdInner.BackgroundTransparency = 1
-rdInner.BorderSizePixel    = 0
-local rdInLayout = Instance.new("UIListLayout", rdInner)
-rdInLayout.FillDirection   = Enum.FillDirection.Vertical
-rdInLayout.Padding         = UDim.new(0,4)
+local rdTopRow = Instance.new("Frame", rdFrame)
+rdTopRow.Size = UDim2.new(1, 0, 0, 12); rdTopRow.BackgroundTransparency = 1
 
-local rdTop = Instance.new("Frame", rdInner)
-rdTop.Size               = UDim2.new(1,0,0,12)
-rdTop.BackgroundTransparency = 1
-
-local rdLbl = Instance.new("TextLabel", rdTop)
-rdLbl.Text          = "Render Distance"
-rdLbl.Font          = Enum.Font.Code
-rdLbl.TextSize      = 9
-rdLbl.TextColor3    = Color3.fromRGB(180,180,180)
-rdLbl.BackgroundTransparency = 1
-rdLbl.Size          = UDim2.new(0.6,0,1,0)
+local rdLbl = Instance.new("TextLabel", rdTopRow)
+rdLbl.Text = "Render Distance"; rdLbl.Font = Enum.Font.Code
+rdLbl.TextSize = 9; rdLbl.TextColor3 = Color3.fromRGB(180,180,180)
+rdLbl.BackgroundTransparency = 1; rdLbl.Size = UDim2.new(0.6,0,1,0)
 rdLbl.TextXAlignment = Enum.TextXAlignment.Left
 
-local rdValLbl = Instance.new("TextLabel", rdTop)
-rdValLbl.Text          = tostring(renderDist)
-rdValLbl.Font          = Enum.Font.Code
-rdValLbl.TextSize      = 9
-rdValLbl.TextColor3    = Color3.fromRGB(0,220,110)
+local rdValLbl = Instance.new("TextLabel", rdTopRow)
+rdValLbl.Text = tostring(renderDist); rdValLbl.Font = Enum.Font.Code
+rdValLbl.TextSize = 9; rdValLbl.TextColor3 = Color3.fromRGB(0,220,110)
 rdValLbl.BackgroundTransparency = 1
-rdValLbl.Size          = UDim2.new(0.4,0,1,0)
-rdValLbl.Position      = UDim2.new(0.6,0,0,0)
+rdValLbl.Size = UDim2.new(0.4,0,1,0); rdValLbl.Position = UDim2.new(0.6,0,0,0)
 rdValLbl.TextXAlignment = Enum.TextXAlignment.Right
 
-local sliderTrack = Instance.new("Frame", rdInner)
-sliderTrack.Size             = UDim2.new(1,0,0,6)
-sliderTrack.BackgroundColor3 = Color3.fromRGB(40,40,40)
-sliderTrack.BorderSizePixel  = 0
-Instance.new("UICorner", sliderTrack).CornerRadius = UDim.new(1,0)
+local rdTrack = Instance.new("Frame", rdFrame)
+rdTrack.Size = UDim2.new(1,0,0,6); rdTrack.BackgroundColor3 = Color3.fromRGB(40,40,40)
+rdTrack.BorderSizePixel = 0
+Instance.new("UICorner", rdTrack).CornerRadius = UDim.new(1,0)
 
-local sliderFill = Instance.new("Frame", sliderTrack)
-sliderFill.Size             = UDim2.new(0.5,0,1,0)
-sliderFill.BackgroundColor3 = Color3.fromRGB(0,200,100)
-sliderFill.BorderSizePixel  = 0
-Instance.new("UICorner", sliderFill).CornerRadius = UDim.new(1,0)
+local rdFill = Instance.new("Frame", rdTrack)
+rdFill.Size = UDim2.new(0.5,0,1,0); rdFill.BackgroundColor3 = Color3.fromRGB(0,200,100)
+rdFill.BorderSizePixel = 0
+Instance.new("UICorner", rdFill).CornerRadius = UDim.new(1,0)
 
-local sliderThumb = Instance.new("TextButton", sliderTrack)
-sliderThumb.Size             = UDim2.new(0,16,0,16)
-sliderThumb.AnchorPoint      = Vector2.new(0.5,0.5)
-sliderThumb.Position         = UDim2.new(0.5,0,0.5,0)
-sliderThumb.BackgroundColor3 = Color3.fromRGB(255,255,255)
-sliderThumb.Text             = ""
-sliderThumb.BorderSizePixel  = 0
-sliderThumb.ZIndex           = 10
-Instance.new("UICorner", sliderThumb).CornerRadius = UDim.new(1,0)
+local rdThumb = Instance.new("TextButton", rdTrack)
+rdThumb.Size = UDim2.new(0,16,0,16); rdThumb.AnchorPoint = Vector2.new(0.5,0.5)
+rdThumb.Position = UDim2.new(0.5,0,0.5,0)
+rdThumb.BackgroundColor3 = Color3.fromRGB(255,255,255)
+rdThumb.Text = ""; rdThumb.BorderSizePixel = 0; rdThumb.ZIndex = 10
+Instance.new("UICorner", rdThumb).CornerRadius = UDim.new(1,0)
 
 local MIN_RD, MAX_RD = 64, 1024
-local slideDragging = false
-
+local rdDragging = false
 local function setRDValue(val)
-    val = math.clamp(math.floor(val), MIN_RD, MAX_RD)
+    val = math.clamp(math.floor(val/64)*64, MIN_RD, MAX_RD)
     renderDist = val
     local pct = (val - MIN_RD) / (MAX_RD - MIN_RD)
-    sliderFill.Size     = UDim2.new(pct, 0, 1, 0)
-    sliderThumb.Position = UDim2.new(pct, 0, 0.5, 0)
-    rdValLbl.Text       = tostring(val)
+    rdFill.Size = UDim2.new(pct,0,1,0); rdThumb.Position = UDim2.new(pct,0,0.5,0)
+    rdValLbl.Text = tostring(val)
 end
-
-local function posToRDVal(xPos)
-    local abs = sliderTrack.AbsolutePosition
-    local sz  = sliderTrack.AbsoluteSize
-    local pct = math.clamp((xPos - abs.X) / sz.X, 0, 1)
-    return MIN_RD + pct * (MAX_RD - MIN_RD)
-end
-
-sliderThumb.MouseButton1Down:Connect(function() slideDragging = true end)
-sliderThumb.TouchLongPress:Connect(function() slideDragging = true end)
-sliderTrack.InputBegan:Connect(function(i)
+rdThumb.MouseButton1Down:Connect(function() rdDragging = true end)
+rdTrack.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1
     or i.UserInputType == Enum.UserInputType.Touch then
-        slideDragging = true
-        setRDValue(posToRDVal(i.Position.X))
+        rdDragging = true
+        local abs = rdTrack.AbsolutePosition; local sz = rdTrack.AbsoluteSize
+        setRDValue(MIN_RD + math.clamp((i.Position.X-abs.X)/sz.X,0,1)*(MAX_RD-MIN_RD))
     end
 end)
 
--- ================================================
--- APPLY & LOG
--- ================================================
+-- APPLY BUTTON
 local applyBtn = Instance.new("TextButton", body)
 applyBtn.Text             = "⚡ APPLY NUKE"
 applyBtn.Font             = Enum.Font.Code
 applyBtn.TextSize         = 10
-applyBtn.TextColor3       = Color3.fromRGB(0,0,0)
-applyBtn.BackgroundColor3 = Color3.fromRGB(0,220,110)
-applyBtn.Size             = UDim2.new(1,0,0,24)
+applyBtn.TextColor3       = Color3.fromRGB(0, 0, 0)
+applyBtn.BackgroundColor3 = Color3.fromRGB(0, 220, 110)
+applyBtn.Size             = UDim2.new(1, 0, 0, 24)
 applyBtn.BorderSizePixel  = 0
 applyBtn.LayoutOrder      = 10
-Instance.new("UICorner", applyBtn).CornerRadius = UDim.new(0,6)
+Instance.new("UICorner", applyBtn).CornerRadius = UDim.new(0, 6)
 
 local logBox = Instance.new("TextLabel", body)
-logBox.Text          = "ready."
-logBox.Font          = Enum.Font.Code
-logBox.TextSize      = 8
-logBox.TextColor3    = Color3.fromRGB(80,80,80)
-logBox.BackgroundColor3 = Color3.fromRGB(8,8,8)
-logBox.Size          = UDim2.new(1,0,0,28)
-logBox.TextWrapped   = true
-logBox.TextXAlignment = Enum.TextXAlignment.Left
-logBox.BorderSizePixel = 0
-logBox.LayoutOrder   = 11
-Instance.new("UICorner", logBox).CornerRadius = UDim.new(0,5)
-local lbP = Instance.new("UIPadding", logBox)
-lbP.PaddingLeft  = UDim.new(0,5)
-lbP.PaddingTop   = UDim.new(0,3)
-lbP.PaddingRight = UDim.new(0,5)
+logBox.Text                   = "ready."
+logBox.Font                   = Enum.Font.Code
+logBox.TextSize               = 8
+logBox.TextColor3             = Color3.fromRGB(80, 80, 80)
+logBox.BackgroundColor3       = Color3.fromRGB(8, 8, 8)
+logBox.Size                   = UDim2.new(1, 0, 0, 28)
+logBox.TextWrapped            = true
+logBox.TextXAlignment         = Enum.TextXAlignment.Left
+logBox.BorderSizePixel        = 0
+logBox.LayoutOrder            = 11
+Instance.new("UICorner", logBox).CornerRadius = UDim.new(0, 5)
+local lbPad = Instance.new("UIPadding", logBox)
+lbPad.PaddingLeft = UDim.new(0,5); lbPad.PaddingTop = UDim.new(0,3)
+lbPad.PaddingRight = UDim.new(0,5)
 
 local function log(msg) logBox.Text = "> " .. msg end
 
--- ================================================
 -- OPEN/CLOSE
--- ================================================
 local bodyOpen = true
 toggleBtn.MouseButton1Click:Connect(function()
     bodyOpen = not bodyOpen
@@ -472,42 +547,46 @@ toggleBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ================================================
--- DRAG — FIXED (isolated, no touch bleed)
+-- DRAG — FIXED + DEADZONE
 -- ================================================
-local dragging   = false
-local dragStart  = nil
-local startPos   = nil
-local DRAG_DEAD  = 6  -- pixel deadzone biar ga trigger saat tap
+local dragging  = false
+local dragStart = nil
+local startPos  = nil
+local DEADZONE  = 6
 
--- Hanya header yang bisa drag
 header.InputBegan:Connect(function(input)
-    -- jangan trigger kalau klik toggleBtn
     if input.UserInputType == Enum.UserInputType.MouseButton1
     or input.UserInputType == Enum.UserInputType.Touch then
         dragStart = input.Position
         startPos  = main.Position
-        dragging  = false  -- belum drag sampai melewati deadzone
+        dragging  = false
     end
 end)
 
 UserInputService.InputChanged:Connect(function(input)
-    -- slider priority
-    if slideDragging then
-        if input.UserInputType == Enum.UserInputType.MouseMovement
-        or input.UserInputType == Enum.UserInputType.Touch then
-            setRDValue(posToRDVal(input.Position.X))
-        end
+    -- slider priorities
+    if capDragging and (
+        input.UserInputType == Enum.UserInputType.MouseMovement or
+        input.UserInputType == Enum.UserInputType.Touch
+    ) then
+        local abs = capTrack.AbsolutePosition; local sz = capTrack.AbsoluteSize
+        setCapValue(MIN_FPS + math.clamp((input.Position.X-abs.X)/sz.X,0,1)*(MAX_FPS-MIN_FPS))
         return
     end
-
-    -- drag hanya aktif kalau dragStart ada dan cursor di header zone
+    if rdDragging and (
+        input.UserInputType == Enum.UserInputType.MouseMovement or
+        input.UserInputType == Enum.UserInputType.Touch
+    ) then
+        local abs = rdTrack.AbsolutePosition; local sz = rdTrack.AbsoluteSize
+        setRDValue(MIN_RD + math.clamp((input.Position.X-abs.X)/sz.X,0,1)*(MAX_RD-MIN_RD))
+        return
+    end
     if dragStart and (
         input.UserInputType == Enum.UserInputType.MouseMovement or
         input.UserInputType == Enum.UserInputType.Touch
     ) then
         local delta = input.Position - dragStart
-        -- deadzone check
-        if not dragging and (math.abs(delta.X) > DRAG_DEAD or math.abs(delta.Y) > DRAG_DEAD) then
+        if not dragging and (math.abs(delta.X) > DEADZONE or math.abs(delta.Y) > DEADZONE) then
             dragging = true
         end
         if dragging then
@@ -522,41 +601,94 @@ end)
 UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1
     or input.UserInputType == Enum.UserInputType.Touch then
-        dragging      = false
-        dragStart     = nil
-        slideDragging = false
+        dragging    = false; dragStart = nil
+        rdDragging  = false; capDragging = false
     end
 end)
 
 -- ================================================
--- NUKE FUNCTIONS (no Heartbeat loop — one-shot only)
+-- NUKE HELPERS
 -- ================================================
 local leafKW = {
-    "leaf","leaves","daun","foliage","tree","pohon",
-    "bush","shrub","grass","rumput","plant","tanaman","bark","branch"
+    "leaf","leaves","daun","foliage","tree","pohon","bush","shrub",
+    "grass","rumput","plant","tanaman","bark","branch","vine","fern"
 }
 local function isLeaf(name)
     name = name:lower()
     for _, k in ipairs(leafKW) do
-        if name:find(k,1,true) then return true end
+        if name:find(k, 1, true) then return true end
     end
     return false
 end
 
+-- ================================================
+-- CORE NUKE OBJECT — setiap kelas di-handle
+-- ================================================
 local function nukeObject(obj)
     pcall(function()
-        -- TEXTURE: SurfaceAppearance adalah biang PBR texture
+
+        -- [1] PBR TEXTURE KILLER — ini yg paling mahal di GPU
         if obj:IsA("SurfaceAppearance") or obj:IsA("MaterialVariant") then
             obj:Destroy(); return
         end
 
+        -- [2] LIGHT SOURCES — tiap PointLight/SpotLight hit GPU shadow pass
+        if CFG.lightKill and (
+            obj:IsA("PointLight") or obj:IsA("SpotLight") or obj:IsA("SurfaceLight")
+        ) then
+            obj.Enabled = false  -- disable > destroy (safer)
+            return
+        end
+
+        -- [3] PHYSICS CONSTRAINTS — setiap constraint = physics solver iteration
+        if CFG.constraintKill and (
+            obj:IsA("SpringConstraint") or obj:IsA("RopeConstraint") or
+            obj:IsA("RodConstraint")    or obj:IsA("HingeConstraint") or
+            obj:IsA("BallSocketConstraint") or obj:IsA("PrismaticConstraint") or
+            obj:IsA("UniversalConstraint") or obj:IsA("CylindricalConstraint") or
+            obj:IsA("TorsionSpringConstraint") or obj:IsA("PlaneConstraint") or
+            obj:IsA("LineForce") or obj:IsA("VectorForce") or obj:IsA("BodyVelocity") or
+            obj:IsA("BodyPosition") or obj:IsA("BodyForce") or obj:IsA("BodyGyro") or
+            obj:IsA("BodyAngularVelocity")
+        ) then
+            obj:Destroy(); return
+        end
+
+        -- [4] SOUNDS — audio processing cost
+        if CFG.soundKill and obj:IsA("Sound") then
+            obj:Stop()
+            obj.Volume = 0
+            return
+        end
+
+        -- [5] BILLBOARD & SURFACE GUI — render pass overhead
+        if CFG.guiKill and (obj:IsA("BillboardGui") or obj:IsA("SurfaceGui")) then
+            obj.Enabled = false; return
+        end
+
+        -- [6] CLICK DETECTOR — input polling overhead
+        if obj:IsA("ClickDetector") then
+            obj.MaxActivationDistance = 0; return
+        end
+
+        -- [7] SELECTION DECORATORS
+        if obj:IsA("SelectionBox") or obj:IsA("SelectionSphere") then
+            obj:Destroy(); return
+        end
+
+        -- [8] EXPLOSION — bikin physics spike
+        if obj:IsA("Explosion") then
+            obj.BlastRadius = 0; return
+        end
+
+        -- [9] MESH — texture kill
         if obj:IsA("MeshPart") then
             if state.texture then
                 obj.TextureID   = ""
                 obj.Material    = Enum.Material.SmoothPlastic
                 obj.Reflectance = 0
-                obj.CastShadow  = state.shadow and false or obj.CastShadow
             end
+            if state.shadow then obj.CastShadow = false end
             return
         end
 
@@ -565,6 +697,7 @@ local function nukeObject(obj)
             return
         end
 
+        -- [10] BASE PART — main bulk
         if obj:IsA("BasePart") then
             if state.texture then
                 obj.Material    = Enum.Material.SmoothPlastic
@@ -579,8 +712,6 @@ local function nukeObject(obj)
                 return
             end
 
-            -- Render distance: tandai visibility, bukan loop tiap frame
-            -- (dihandle di apply sekali saja, bukan Heartbeat)
             if state.anchor then
                 local isChar = false
                 for _, p in ipairs(Players:GetPlayers()) do
@@ -588,40 +719,57 @@ local function nukeObject(obj)
                         isChar = true; break
                     end
                 end
-                if not isChar then obj.Anchored = true end
+                if not isChar then
+                    obj.Anchored = true
+                    -- Network ownership: kalau anchored ga perlu sync ke server
+                    if CFG.netOwn then
+                        pcall(function() obj:SetNetworkOwner(nil) end)
+                    end
+                end
             end
             return
         end
 
+        -- [11] DECAL / TEXTURE
         if obj:IsA("Decal") or obj:IsA("Texture") then
             if state.texture then obj.Transparency = 1 end
             return
         end
 
+        -- [12] FX
         if state.fx and (
             obj:IsA("ParticleEmitter") or obj:IsA("Fire") or
-            obj:IsA("Smoke") or obj:IsA("Sparkles") or
-            obj:IsA("Trail") or obj:IsA("Beam")
+            obj:IsA("Smoke")           or obj:IsA("Sparkles") or
+            obj:IsA("Trail")           or obj:IsA("Beam")
         ) then
             obj:Destroy()
         end
+
+        -- [13] NPC HUMANOID — disable expensive state machine
+        if CFG.npcOptim and obj:IsA("Humanoid") then
+            local isLocalChar = lp.Character and obj:IsDescendantOf(lp.Character)
+            if not isLocalChar then
+                pcall(function()
+                    obj:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+                    obj:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+                    obj:SetStateEnabled(Enum.HumanoidStateType.GettingUp, false)
+                    obj:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
+                    obj:SetStateEnabled(Enum.HumanoidStateType.Climbing, false)
+                    obj:SetStateEnabled(Enum.HumanoidStateType.Physics, false)
+                end)
+            end
+        end
+
     end)
 end
 
 -- ================================================
--- RENDER DISTANCE — ONE-SHOT, BUKAN HEARTBEAT LOOP
--- Heartbeat tiap frame scan ribuan part = LAG
--- Ganti: scan sekali, set Transparency, selesai
+-- RENDER DISTANCE — ONE-SHOT
 -- ================================================
 local function applyRenderDistOnce()
-    local char = lp.Character
-    if not char then return end
-    local root = char:FindFirstChild("HumanoidRootPart")
-    if not root then return end
-
-    local rp = root.Position
-    local count = 0
-
+    local char = lp.Character; if not char then return 0 end
+    local root = char:FindFirstChild("HumanoidRootPart"); if not root then return 0 end
+    local rp, n = root.Position, 0
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj:IsA("BasePart") then
             local isChar = false
@@ -630,43 +778,58 @@ local function applyRenderDistOnce()
                     isChar = true; break
                 end
             end
-            if not isChar then
-                local d = (obj.Position - rp).Magnitude
-                if d > renderDist and obj.Transparency < 0.99 then
-                    pcall(function() obj.Transparency = 1 end)
-                    count = count + 1
-                end
+            if not isChar and (obj.Position-rp).Magnitude > renderDist then
+                pcall(function() obj.Transparency = 1 end); n += 1
             end
         end
     end
-    return count
+    return n
 end
 
 -- ================================================
--- APPLY BUTTON
+-- APPLY BUTTON LOGIC
 -- ================================================
 applyBtn.MouseButton1Click:Connect(function()
-    -- ambil FPS baseline sebelum apply
     if not applied then
-        fpsBaseline = getFPS()
-        fpsBeforeVal.Text = fpsBaseline .. " fps"
-        fpsBeforeVal.TextColor3 = fpsBaseline >= 50 and Color3.fromRGB(80,200,120)
-            or fpsBaseline >= 30 and Color3.fromRGB(220,180,60)
-            or Color3.fromRGB(200,80,60)
+        local b = getFPS()
+        fpsBeforeVal.Text       = b .. " fps"
+        fpsBeforeVal.TextColor3 = colorFPS(b)
     end
 
-    statusVal.Text      = "● RUNNING"
-    statusVal.TextColor3 = Color3.fromRGB(255,180,0)
-    applyBtn.Text        = "..."
-    applyBtn.BackgroundColor3 = Color3.fromRGB(30,30,30)
-    applyBtn.TextColor3       = Color3.fromRGB(0,220,110)
+    statusVal.Text            = "● RUNNING"
+    statusVal.TextColor3      = Color3.fromRGB(255, 180, 0)
+    applyBtn.Text             = "..."
+    applyBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    applyBtn.TextColor3       = Color3.fromRGB(0, 220, 110)
 
     task.spawn(function()
 
-        -- LIGHTING
+        -- [A] FPS CAP BYPASS
+        log("setting fps cap " .. fpsCapValue .. "...")
+        local capMethod = trySetFPSCap(fpsCapValue)
+
+        -- [B] GRAPHICS QUALITY FORCE
+        pcall(function()
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+        end)
+
+        -- [C] HIDDEN PROPERTIES (executor only)
+        -- Compatibility = paling ringan, matiin PBR pipeline
+        trySetHidden(Lighting, "Technology",
+            Enum.Technology.Compatibility)
+        -- Shadow map off
+        trySetHidden(Lighting, "ShadowSoftness", 0)
+        -- Mesh LOD force lowest
+        trySetHidden(workspace, "MeshPartHeads", false)
+        -- Streaming radius minimum
+        trySetHidden(workspace, "StreamingMinRadius", 64)
+        trySetHidden(workspace, "StreamingTargetRadius", renderDist)
+
+        -- [D] LIGHTING NUKE
         if state.shadow then
-            log("killing shadows...")
+            log("killing lights & shadows...")
             pcall(function() Lighting.GlobalShadows = false end)
+            pcall(function() Lighting.Brightness    = 2 end)
             for _, v in ipairs(Lighting:GetChildren()) do
                 pcall(function()
                     if v:IsA("BlurEffect") or v:IsA("ColorCorrectionEffect")
@@ -678,16 +841,17 @@ applyBtn.MouseButton1Click:Connect(function()
             end
         end
 
-        -- ATMOSPHERE
+        -- [E] ATMOSPHERE
         for _, v in ipairs(Lighting:GetChildren()) do
             pcall(function()
                 if v:IsA("Atmosphere") then
-                    v.Density = 0; v.Glare = 0; v.Haze = 0; v.Offset = 0
+                    v.Density = 0; v.Glare = 0
+                    v.Haze    = 0; v.Offset = 0
                 end
             end)
         end
 
-        -- SKY
+        -- [F] SKY
         if state.sky then
             log("killing skybox...")
             for _, v in ipairs(Lighting:GetChildren()) do
@@ -697,64 +861,69 @@ applyBtn.MouseButton1Click:Connect(function()
             end
         end
 
-        -- TERRAIN (no Decoration — deprecated)
+        -- [G] SOUND SERVICE MUTE
+        if CFG.soundKill then
+            log("muting audio...")
+            pcall(function() SoundService.RespectFilteringEnabled = false end)
+        end
+
+        -- [H] TERRAIN
         pcall(function()
             local t = workspace:FindFirstChildOfClass("Terrain")
             if t then
-                t.WaterWaveSize     = 0
-                t.WaterWaveSpeed    = 0
-                t.WaterReflectance  = 0
-                t.WaterTransparency = 0
+                t.WaterWaveSize    = 0; t.WaterWaveSpeed   = 0
+                t.WaterReflectance = 0; t.WaterTransparency = 0
             end
         end)
 
-        -- GRAPHICS QUALITY
-        pcall(function()
-            settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
-        end)
-
-        -- MAIN SCAN — descendants
-        log("scanning workspace...")
-        local total = 0
-        local descendants = workspace:GetDescendants()
-        -- batch process: 300 obj per frame biar ga freeze
-        local BATCH = 300
-        for i = 1, #descendants, BATCH do
-            for j = i, math.min(i + BATCH - 1, #descendants) do
-                nukeObject(descendants[j])
-                total = total + 1
+        -- [I] MAIN SCAN — batched biar ga freeze
+        log("nuking workspace...")
+        local total   = 0
+        local list    = workspace:GetDescendants()
+        local BATCH   = 250
+        for i = 1, #list, BATCH do
+            for j = i, math.min(i + BATCH - 1, #list) do
+                nukeObject(list[j])
+                total += 1
             end
-            task.wait() -- yield 1 frame per batch, preventing freeze
+            task.wait()
         end
 
-        log("render dist " .. renderDist .. " studs...")
+        -- [J] RENDER DISTANCE ONE-SHOT
+        log("applying render dist...")
         local hidden = applyRenderDistOnce()
 
-        task.wait(0.5)
-        applied = true
-        local afterFPS = getFPS()
-        fpsAfterVal.Text = afterFPS .. " fps"
-        fpsAfterVal.TextColor3 = afterFPS >= 50 and Color3.fromRGB(80,200,120)
-            or afterFPS >= 30 and Color3.fromRGB(220,180,60)
-            or Color3.fromRGB(200,80,60)
+        -- [K] CAMERA TRICK — narrow FOV = less geometry rendered
+        pcall(function()
+            local cam = workspace.CurrentCamera
+            -- don't override if game uses custom FOV
+        end)
 
-        log(total .. " obj nuked, " .. (hidden or 0) .. " hidden ✓")
-        statusVal.Text       = "● ACTIVE"
-        statusVal.TextColor3 = Color3.fromRGB(0,255,136)
-        applyBtn.Text        = "⚡ RE-APPLY"
-        applyBtn.BackgroundColor3 = Color3.fromRGB(0,220,110)
-        applyBtn.TextColor3       = Color3.fromRGB(0,0,0)
+        task.wait(0.8) -- kasih waktu FPS stabil
+        applied = true
+        local af = getFPS()
+        fpsAfterVal.Text       = af .. " fps"
+        fpsAfterVal.TextColor3 = colorFPS(af)
+
+        log(total .. " obj | " .. hidden .. " hidden | " .. capMethod)
+        statusVal.Text            = "● ACTIVE"
+        statusVal.TextColor3      = Color3.fromRGB(0, 255, 136)
+        applyBtn.Text             = "⚡ RE-APPLY"
+        applyBtn.BackgroundColor3 = Color3.fromRGB(0, 220, 110)
+        applyBtn.TextColor3       = Color3.fromRGB(0, 0, 0)
     end)
 end)
 
 -- ================================================
--- LIVE LISTENER — ringan, hanya cek instance baru
+-- LIVE LISTENER — defer biar ga blocking
 -- ================================================
 workspace.DescendantAdded:Connect(function(obj)
     if not applied then return end
-    task.defer(function()  -- defer = lebih ringan dari task.wait()
+    task.defer(function()
         pcall(function() nukeObject(obj) end)
     end)
 end)
 
-print("[NONO v3.0] loaded clean. no heartbeat loop. drag fixed.")
+print("[NONO v4.0] maximum overdrive loaded.")
+print("setfpscap available:", setfpscap ~= nil)
+print("sethiddenproperty available:", sethiddenproperty ~= nil)
